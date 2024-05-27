@@ -88,12 +88,14 @@ def parse_filename(filename):
     try:
         filename = filename.replace('-', '_')
         parts = filename.split('_')
-        if len(parts) < 7:
-            raise ValueError("Filename format is incorrect")
+        date_str = '_'.join(parts[4:7])
+        date = datetime.strptime(date_str, '%Y_%m_%d').strftime('%Y_%m_%d')
+        flight_number = parts[3]
+        camera_name = parts[2]
         return {
-            "camera_name": parts[2],
-            "flight_number": int(parts[3]),
-            "date": "_".join(parts[4:7])
+            'date': date,
+            'flight_number': flight_number,
+            'camera_name': camera_name
         }
     except Exception as e:
         logger.error(f"Error parsing filename: {e}")
@@ -115,10 +117,15 @@ def get_or_create_session(video_storage, date):
     Retrieve or create a new session based on the provided date.
     """
     try:
-        session = next((s for s in video_storage["sessions"] if s["date"] == date), None)
-        if session:
-            return session
-        new_session = {"session_id": generate_unique_id(video_storage["sessions"]), "date": date, "flights": []}
+        for session in video_storage["sessions"]:
+            if session["date"] == date:
+                return session
+        
+        new_session = {
+            "session_id": generate_unique_id(video_storage["sessions"]),
+            "date": date,
+            "flights": []
+        }
         video_storage["sessions"].append(new_session)
         video_storage["sessions"].sort(key=lambda s: datetime.strptime(s["date"], '%Y_%m_%d'))
         for idx, session in enumerate(video_storage["sessions"]):
@@ -136,7 +143,12 @@ def get_or_create_flight(session, flight_number, length=None):
         for flight in session["flights"]:
             if flight["flight_id"] == flight_number:
                 return flight
-        new_flight = {"flight_id": flight_number, "videos": [], "length": length}
+        
+        new_flight = {
+            "flight_id": flight_number,
+            "videos": [],
+            "length": length
+        }
         session["flights"].append(new_flight)
         return new_flight
     except Exception as e:
@@ -194,6 +206,33 @@ async def find_video(update: Update, context: CallbackContext, session_id, fligh
         logger.error(f"Error finding video: {e}")
         return None, None, None
 
+def total_flight_time(video_storage):
+    """
+    Calculate the total flight time across all sessions.
+    """
+    total_time = 0
+    for session in video_storage["sessions"]:
+        for flight in session["flights"]:
+            total_time += flight["length"]
+    return total_time
+
+def days_since_first_session(video_storage):
+    """
+    Calculate the number of days since the first session.
+    """
+    if not video_storage["sessions"]:
+        return 0
+
+    # Find the earliest date in the sessions
+    earliest_date_str = min(session["date"] for session in video_storage["sessions"])
+    earliest_date = datetime.strptime(earliest_date_str, "%Y_%m_%d")
+    
+    # Calculate the number of days since the earliest session
+    current_date = datetime.now()
+    days_since_first = (current_date - earliest_date).days
+    
+    return days_since_first
+
 
 # Command handlers
 async def create_storage(update: Update, context: CallbackContext):
@@ -241,35 +280,18 @@ async def show_storage(update: Update, context: CallbackContext):
         logger.error(f"Error showing storage: {e}")
 
 async def start(update: Update, context: CallbackContext, edit=0):
-    """
-    Send a welcome message when the /start command is issued.
-    """
     try:
-        text = "Welcome to the Bodyflight Video Bot\! Use buttons to navigate\."
-        keyboard = [
-            [
-                InlineKeyboardButton("Show List", callback_data="home:1"),
-                InlineKeyboardButton("My stats", callback_data="stats"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        if edit == 1:
-            await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
-        else:
-            await update.message.delete()
-            await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+        await update.message.delete()
+        await show_start_menu(update, context, edit=1)
     except Exception as e:
-        logger.error(f"Error sending start message: {e}")
-
+        logger.error(f"Error start command: {e}")
+    
 async def list(update: Update, context: CallbackContext):
-    """
-    List the available video sessions.
-    """
     try:
         await update.message.delete()
         await show_sessions(update, context, edit=1)
     except Exception as e:
-        logger.error(f"Error listing sessions: {e}")
+        logger.error(f"Error list command: {e}")
 
 
 # JSON file handling (aka updating video storage)
@@ -315,10 +337,15 @@ async def upload_video(update: Update, context: CallbackContext):
         session = get_or_create_session(video_storage, date)
         flight = get_or_create_flight(session, flight_number, file_duration)
 
-        # Check if a video with the same filename already exists
-        existing_video = any(existing["filename"] == file_name for existing in flight["videos"])
+        # Check for duplicate video across all flights in all sessions
+        duplicate_found = any(
+            video["filename"] == file_name
+            for session in video_storage["sessions"]
+            for flight in session["flights"]
+            for video in flight["videos"]
+        )
 
-        if not existing_video:
+        if not duplicate_found:
             video_id = generate_unique_id(flight["videos"], key="video_id")
             flight["videos"].append({
                 "video_id": video_id,
@@ -327,8 +354,10 @@ async def upload_video(update: Update, context: CallbackContext):
                 "file_id": file_id
             })
             await save_storage(update, context, video_storage)
+            logger.info(f"Video {file_name} added successfully.")
         else:
             logger.info(f"Ignoring duplicate video with filename: {file_name}")
+        
         await update.message.delete()
         logger.info("Deleted the original video message.")
     except ValueError as e:
@@ -348,7 +377,8 @@ async def inline_button(update: Update, context: CallbackContext):
     try:
         parts = query.data.split(':')
         handler = {
-            "start": start,
+            "start": show_start_menu,
+            "stats": show_statistics,
             "home": show_sessions,
             "session": show_flights,
             "flight": show_videos,
@@ -362,6 +392,74 @@ async def inline_button(update: Update, context: CallbackContext):
 
 
 # Menu display functions
+async def show_start_menu(update: Update, context: CallbackContext, edit=0):
+    """
+    Start menu
+    """
+    try:
+        text = "Welcome to the Bodyflight Video Bot\! Use buttons to navigate\."
+        keyboard = [
+            [
+                InlineKeyboardButton("Show List", callback_data="home:1"),
+                InlineKeyboardButton("My stats", callback_data="stats"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if edit == 1:
+            await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+        else:
+            await update.message.delete()
+            await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error sending start message: {e}")
+
+async def show_statistics(update: Update, context: CallbackContext):
+    """
+    Stats
+    """
+    
+    def format_flight_time(seconds):
+            hours, remainder = divmod(seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            
+            if hours > 0:
+                return f"{hours} hour \: {minutes} min \: {seconds} sec"
+            elif minutes > 0:
+                return f"{minutes} min \: {seconds} sec"
+            else:
+                return f"{seconds} sec"
+            
+    def format_days_count(days):
+        years, remainder = divmod(days, 365)
+        months, days = divmod(remainder, 30)
+        
+        if years > 0:
+            return f"{years} year\(s\) \: {months} month\(s\) \: {days} day\(s\)"
+        elif months > 0:
+            return f"{months} month\(s\) \: {days} day\(s\)"
+        else:
+            return f"{days} day\(s\)"
+        
+    try:
+        video_storage = await load_storage(update, context)
+        flight_time = "You have flown for " + format_flight_time(total_flight_time(video_storage))
+        days_flown = "You started flying " + format_days_count(days_since_first_session(video_storage)) + " ago"
+        text = "\n".join([
+            "Here is some entertaining stats\:", 
+            days_flown,
+            flight_time
+        ])
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("<- Back", callback_data="start:1")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error sending start message: {e}")
+
 async def show_sessions(update: Update, context: CallbackContext, edit=0):
     """
     Show the list of sessions in the storage.
