@@ -1,7 +1,2 @@
-Flask==1.1.4
-werkzeug==1.0.1
-markupsafe==2.0.1
-jinja2==2.11.3
 python-telegram-bot==20.0
 python-dotenv==0.19.2
-google-cloud-storage==2.1.0
