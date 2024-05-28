@@ -400,8 +400,8 @@ async def show_start_menu(update: Update, context: CallbackContext, edit=0):
         text = "Welcome to the Bodyflight Video Bot\! Use buttons to navigate\."
         keyboard = [
             [
-                InlineKeyboardButton("Show List", callback_data="home:1"),
-                InlineKeyboardButton("My stats", callback_data="stats"),
+                InlineKeyboardButton("Browse Videos", callback_data="home:1"),
+                InlineKeyboardButton("My Stats", callback_data="stats"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
