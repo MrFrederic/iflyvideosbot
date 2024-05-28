@@ -1,3 +1,5 @@
+from dotmap import DotMap
+import asyncio
 import logging
 import os
 import io
@@ -11,6 +13,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv('.env')
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+SYSTEM_DATA_FILE = os.getenv("SYSTEM_DATA_FILE")
+IFLY_CHAT_ID = int(os.getenv("IFLY_CHAT_ID"))
 
 
 # Configure logging
@@ -19,29 +23,36 @@ logger = logging.getLogger(__name__)
 
 
 # Storage functions
-async def get_storage_message(update: Update, context: CallbackContext):
+async def get_storage_message(update: Update, context: CallbackContext, chat_id=None):
     """
     Retrieve the pinned message in the chat to use as storage. If none exists, create a new one.
     """
+    if not chat_id:
+        chat_id = update.message.chat_id
+        
+    
     try:
-        chat = await context.bot.get_chat(update.message.chat_id)
+        chat = await context.bot.get_chat(chat_id)
+        add_or_update_user(update, chat_id, chat.username)
         if chat.pinned_message:
             pinned_message = chat.pinned_message
             logger.info("Pinned message found")
         else:
             logger.info("No pinned message in this chat. Creating new storage message")
-            pinned_message = await create_storage(update, context)
+            pinned_message = await create_storage(update, context, chat_id)
         return pinned_message
     except Exception as e:
         logger.error(f"Error retrieving storage message: {e}")
         return None
 
-async def load_storage(update: Update, context: CallbackContext):
+async def load_storage(update: Update, context: CallbackContext, chat_id=None):
     """
     Load the JSON storage from the pinned message document.
     """
+    if not chat_id:
+        chat_id = update.message.chat_id
     try:
-        message = await get_storage_message(update, context)
+        message = await get_storage_message(update, context, chat_id)
         if not message or not message.document:
             logger.error("Pinned message doesn't contain document")
             return None
@@ -54,15 +65,17 @@ async def load_storage(update: Update, context: CallbackContext):
         logger.error(f"Error while loading storage: {e}")
         return None
 
-async def save_storage(update: Update, context: CallbackContext, video_storage):
+async def save_storage(update: Update, context: CallbackContext, video_storage, chat_id=None):
     """
     Save the video storage JSON data to the pinned message document.
     """
+    if not chat_id:
+        chat_id = update.message.chat_id
     try:
         file_buffer = io.BytesIO()
         file_buffer.write(json.dumps(video_storage).encode('utf-8'))
         file_buffer.seek(0)
-        message = await get_storage_message(update, context)
+        message = await get_storage_message(update, context, chat_id)
         if not message:
             logger.error("No storage message available to save data")
             return None
@@ -233,19 +246,109 @@ def days_since_first_session(video_storage):
     
     return days_since_first
 
+def save_system_data(data=None):
+    if not data:
+        data = {
+            "ifly_chat": {
+                "state": "username",
+                "session": {
+                    "username": "MrFrederic",
+                    "chat_id": 932162499,
+                    "ends": 123456
+                },
+                "menu_message_id": 0
+            },
+            "users": [{
+                "username": "MrFrederic",
+                "chat_id": 932162499
+            }]
+        }
+        data = DotMap(data)
+        
+    # Convert the JSON data to a string
+    json_data = json.dumps(data, indent=4)
+    
+    # Save the JSON data to a file
+    with open(SYSTEM_DATA_FILE, 'w') as json_file:
+        json_file.write(json_data)
+        
+def load_system_data():
+    with open(SYSTEM_DATA_FILE, 'r') as f:
+        return DotMap(json.load(f))
+
+def check_ifly_chat_state(state):
+    try:
+        data = load_system_data()
+        return data.ifly_chat.session.status == state
+    except Exception as e:
+        logger.error(f"Error check_ifly_chat_state: {e}")
+        raise
+
+def update_ifly_chat_state(state):
+    try:
+        data = load_system_data()
+        data.ifly_chat.session.status = state
+        save_system_data(data)
+    except Exception as e:
+        logger.error(f"Error update_ifly_chat_state: {e}")
+        raise
+    
+async def ifly_menu_message_id(context: CallbackContext):
+    try: 
+        data = load_system_data()
+        message_id  = data.ifly_chat.menu_message_id
+        if not message_id:
+            message = await context.bot.send_message(chat_id=IFLY_CHAT_ID, text="Loading")
+            data.ifly_chat.menu_message_id = message.message_id
+        else:
+            try:
+                await context.bot.edit_message_text("Loading", IFLY_CHAT_ID, message_id)
+            except Exception:
+                message = await context.bot.send_message(chat_id=IFLY_CHAT_ID, text="Loading")
+                data.ifly_chat.menu_message_id = message.message_id
+
+        save_system_data(data)
+        return data.ifly_chat.menu_message_id
+    except Exception as e:
+        logger.error(f"Error ifly_menu_message_id: {e}")
+        raise
+    
+def add_or_update_user(update: Update, chat_id=None, username=None):
+    try:
+        data = load_system_data()
+        if not chat_id:
+            chat_id = update.message.chat_id
+        if not username:
+            username = update.message.from_user.username
+        i = 0
+        for user in data.users:
+            if user.chat_id == chat_id:
+                logger.info("User found, updating")
+                user.username = username
+                save_system_data(data)
+                return
+        logger.info("User Not found, creating")
+        new_user = {"username": username, "chat_id": chat_id}
+        data.users.append(new_user)
+        save_system_data(data)
+    except Exception as e:
+        logger.error(f"Error add_or_update_user: {e}")
+        raise
 
 # Command handlers
-async def create_storage(update: Update, context: CallbackContext):
+async def create_storage(update: Update, context: CallbackContext, chat_id=None):
     """
     Create a new storage message and pin it in the chat.
     """
+    if not chat_id:
+        chat_id = update.message.chat_id
     try:
         video_storage = {"sessions": []}
         file_buffer = io.BytesIO()
         file_buffer.write(json.dumps(video_storage).encode('utf-8'))
         file_buffer.seek(0)
         message = await context.bot.send_document(
-            chat_id=update.message.chat_id,
+            chat_id=chat_id,
             document=file_buffer,
             filename="video_storage.json",
             caption="This is a service message. Please, do not delete or unpin it!"
@@ -282,7 +385,11 @@ async def show_storage(update: Update, context: CallbackContext):
 async def start(update: Update, context: CallbackContext, edit=0):
     try:
         await update.message.delete()
-        await show_start_menu(update, context, edit=1)
+        if update.message.chat_id == IFLY_CHAT_ID:
+            await ask_for_username(update, context)
+        else:
+            add_or_update_user(update)
+            await show_start_menu(update, context)
     except Exception as e:
         logger.error(f"Error start command: {e}")
     
@@ -322,7 +429,18 @@ async def upload_video(update: Update, context: CallbackContext):
     Handle video uploads by extracting metadata and storing it.
     """
     try:
-        video_storage = await load_storage(update, context)
+        if not update.message.chat_id == IFLY_CHAT_ID:
+            add_or_update_user(update)
+            chat_id = update.message.chat_id
+        else:
+            data = load_system_data()
+            if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
+                text = "To upload videos - please send your username\n\nSorry, your session expired"
+                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+                update_ifly_chat_state("no")
+                return
+            chat_id = data.ifly_chat.session.chat_id
+        video_storage = await load_storage(update, context, chat_id)
         video = update.message.video
         file_id = video.file_id
         file_name = video.file_name
@@ -353,7 +471,7 @@ async def upload_video(update: Update, context: CallbackContext):
                 "camera_name": camera_name,
                 "file_id": file_id
             })
-            await save_storage(update, context, video_storage)
+            await save_storage(update, context, video_storage, chat_id)
             logger.info(f"Video {file_name} added successfully.")
         else:
             logger.info(f"Ignoring duplicate video with filename: {file_name}")
@@ -372,23 +490,29 @@ async def inline_button(update: Update, context: CallbackContext):
     """
     Handle inline button presses and route to the appropriate function.
     """
-    query = update.callback_query
-    await query.answer()
     try:
-        parts = query.data.split(':')
-        handler = {
-            "start": show_start_menu,
-            "stats": show_statistics,
-            "home": show_sessions,
-            "session": show_flights,
-            "flight": show_videos,
-            "video": open_video,
-        }.get(parts[0])
-        if handler:
-            await handler(query, context, *map(int, parts[1:]))
+        query = update.callback_query
+        
+        await query.answer()
+        
+        if query.message.chat_id == IFLY_CHAT_ID:
+            await ifly_inline_buttons(update, context, query)
+        else: 
+            parts = query.data.split(':')
+            handler = {
+                "start": show_start_menu,
+                "stats": show_statistics,
+                "home": show_sessions,
+                "session": show_flights,
+                "flight": show_videos,
+                "video": open_video,
+                "auth": start_session
+            }.get(parts[0])
+            if handler:
+                await handler(query, context, *map(int, parts[1:]))
     except Exception as e:
         logger.error(f"Error handling callback data: {e}")
-        await query.message.reply_text(f"An error occurred while processing button: {e}")
+        # await query.message.reply_text(f"An error occurred while processing button: {e}")
 
 
 # Menu display functions
@@ -408,7 +532,6 @@ async def show_start_menu(update: Update, context: CallbackContext, edit=0):
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
         else:
-            await update.message.delete()
             await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error sending start message: {e}")
@@ -465,10 +588,12 @@ async def show_sessions(update: Update, context: CallbackContext, edit=0):
     Show the list of sessions in the storage.
     """
     try:
+        add_or_update_user(update)
         video_storage = await load_storage(update, context)
         sessions = video_storage.get("sessions", [])
         if not sessions:
             text = "No sessions found"
+            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Home", callback_data="start:1")]])
         else:
             text = menu_message_text(video_storage)
             session_buttons = [InlineKeyboardButton(f"Session {session['session_id']}", callback_data=f"session:{session['session_id']}") for session in sessions]
@@ -545,6 +670,121 @@ async def open_video(update: Update, context: CallbackContext, session_id, fligh
         await update.message.reply_text(f"Failed to send video: {str(e)}")
 
 
+# Ifly chat functions
+async def ask_for_username(update: Update, context: CallbackContext):
+    # prompts user with username to upload videos to
+    try:
+        text = "To upload videos - please send your username"
+        await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+    except Exception as e:
+        logger.error(f"Error ask_for_username: {e}")
+        raise
+
+async def check_username(update: Update, context: CallbackContext):
+    # check if username exists among users and sends a confirmation message
+    try:
+        if check_ifly_chat_state("no"):
+            data = load_system_data()
+            await update.message.delete()
+            
+            users = data.users
+            chat_id = None
+            
+            for user in users:
+                if str(user.username).lower() == update.message.text.lower().replace('@','').replace("t.me/",''):
+                    logger.info(f"Found user. Chat_id = {user.chat_id}")
+                    chat_id = user.chat_id
+                    username = user.username
+                    break
+            
+            # send auth message
+            if chat_id:
+                text = "Please, confirm your\nauthentification attempt"
+                keyboard = [
+                    [
+                        InlineKeyboardButton("❌", callback_data="auth:0"),
+                        InlineKeyboardButton("✅", callback_data="auth:1"),
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                auth_message = await context.bot.send_message(chat_id, text, reply_markup=reply_markup)
+                
+                
+                text = "To upload videos - please send your username\n\nPlease, confirm authentification from your Telegram account"
+                keyboard = [
+                    [
+                        InlineKeyboardButton("Cancel", callback_data=f"cancel_auth:{chat_id}:{auth_message.message_id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context), reply_markup=reply_markup)
+                
+                data.ifly_chat.session.username = username
+                data.ifly_chat.session.chat_id = chat_id
+                data.ifly_chat.session.ends = int(datetime.now().timestamp())
+                
+                save_system_data(data)
+                update_ifly_chat_state("yes")
+            else:
+                text = "To upload videos - please send your username\n\nUsername not found. Please, try again"
+                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+                                    
+    except Exception as e:
+        logger.error(f"Error ask_for_username: {e}")
+        raise
+
+async def start_session(update: Update, context: CallbackContext, confiramtion):
+    # upon recieving confirmation - starting session
+    # when session ends - updates menu massage to reflect that
+    try:
+        await update.message.delete()
+        logger.info(confiramtion)
+        if confiramtion == 0:
+            text = "To upload videos - please send your username\n\nAuthentification was rejected. Please, try again"
+            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+            update_ifly_chat_state("no")
+        elif confiramtion == 1:
+            data = load_system_data()
+            text = f"Hi, {data.ifly_chat.session.username}!\nUpload your videos"
+            keyboard = [
+                [
+                    InlineKeyboardButton("Logout", callback_data=f"end_session")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context), reply_markup=reply_markup)
+            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + 900
+            save_system_data(data)
+                
+    except Exception as e:
+        logger.error(f"Error ask_for_username: {e}")
+        raise
+
+async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
+    # upon recieving confirmation - starting session
+    # when session ends - updates menu massage to reflect that
+    try:
+        parts = query.data.split(':')
+        logger.info(parts)
+        if parts[0] == "cancel_auth":
+            await context.bot.delete_message(parts[1], parts[2])
+            
+            text = "To upload videos - please send your username"
+            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+            update_ifly_chat_state("no")
+        elif parts[0] == "end_session":
+            text = "To upload videos - please send your username"
+            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+            update_ifly_chat_state("no")
+
+                
+    except Exception as e:
+        logger.error(f"Error ask_for_username: {e}")
+        raise
+
+
+
+
 def main():
     """
     Main function to start the Telegram bot.
@@ -557,6 +797,7 @@ def main():
     application.add_handler(CommandHandler("show_storage", show_storage))
     application.add_handler(CommandHandler("create_storage", create_storage))
     application.add_handler(MessageHandler(filters.VIDEO, upload_video))
+    application.add_handler(MessageHandler(filters.User(user_id=IFLY_CHAT_ID), check_username))
     application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_storage))
     application.add_handler(CallbackQueryHandler(inline_button))
 
