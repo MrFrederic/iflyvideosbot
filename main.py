@@ -39,13 +39,13 @@ async def get_storage_message(update: Update, context: CallbackContext, chat_id=
             logger.info("Pinned message found")
         else:
             logger.info("No pinned message in this chat. Creating new storage message")
-            pinned_message = await create_storage(update, context, chat_id)
+            pinned_message = await create_storage_message(update, context, chat_id)
         return pinned_message
     except Exception as e:
         logger.error(f"Error retrieving storage message: {e}")
         return None
 
-async def load_storage(update: Update, context: CallbackContext, chat_id=None):
+async def load_local_data(update: Update, context: CallbackContext, chat_id=None):
     """
     Load the JSON storage from the pinned message document.
     """
@@ -65,7 +65,7 @@ async def load_storage(update: Update, context: CallbackContext, chat_id=None):
         logger.error(f"Error while loading storage: {e}")
         return None
 
-async def save_storage(update: Update, context: CallbackContext, video_storage, chat_id=None):
+async def save_local_data(update: Update, context: CallbackContext, local_data, chat_id=None):
     """
     Save the video storage JSON data to the pinned message document.
     """
@@ -73,7 +73,7 @@ async def save_storage(update: Update, context: CallbackContext, video_storage, 
         chat_id = update.message.chat_id
     try:
         file_buffer = io.BytesIO()
-        file_buffer.write(json.dumps(video_storage).encode('utf-8'))
+        file_buffer.write(json.dumps(local_data).encode('utf-8'))
         file_buffer.seek(0)
         message = await get_storage_message(update, context, chat_id)
         if not message:
@@ -82,7 +82,7 @@ async def save_storage(update: Update, context: CallbackContext, video_storage, 
         await message.edit_media(
             media=InputMediaDocument(
                 media=file_buffer,
-                filename="video_storage.json",
+                filename="data.json",
                 caption="This is a service message. Please, do not delete or unpin it!"
             )
         )
@@ -125,23 +125,23 @@ def generate_unique_id(storage, key="session_id"):
         logger.error(f"Error generating unique ID: {e}")
         raise
 
-def get_or_create_session(video_storage, date):
+def get_or_create_session(local_data, date):
     """
     Retrieve or create a new session based on the provided date.
     """
     try:
-        for session in video_storage["sessions"]:
+        for session in local_data["sessions"]:
             if session["date"] == date:
                 return session
         
         new_session = {
-            "session_id": generate_unique_id(video_storage["sessions"]),
+            "session_id": generate_unique_id(local_data["sessions"]),
             "date": date,
             "flights": []
         }
-        video_storage["sessions"].append(new_session)
-        video_storage["sessions"].sort(key=lambda s: datetime.strptime(s["date"], '%Y_%m_%d'))
-        for idx, session in enumerate(video_storage["sessions"]):
+        local_data["sessions"].append(new_session)
+        local_data["sessions"].sort(key=lambda s: datetime.strptime(s["date"], '%Y_%m_%d'))
+        for idx, session in enumerate(local_data["sessions"]):
             session["session_id"] = idx + 1
         return new_session
     except Exception as e:
@@ -168,14 +168,14 @@ def get_or_create_flight(session, flight_number, length=None):
         logger.error(f"Error getting or creating flight: {e}")
         raise
 
-def menu_message_text(video_storage, current_session=None, current_flight=None):
+def menu_message_text(local_data, current_session=None, current_flight=None):
     """
     Generate the menu message text for the current video storage state.
     """
     try:
         message = []
         
-        sessions = video_storage.get("sessions", [])
+        sessions = local_data.get("sessions", [])
         
         session = next((s for s in sessions if s["session_id"] == current_session), None)
         flights = session.get("flights", []) if session else []
@@ -206,8 +206,8 @@ async def find_video(update: Update, context: CallbackContext, session_id, fligh
     Find a specific video in the storage based on session, flight, and video IDs.
     """
     try:
-        video_storage = await load_storage(update, context)
-        session = next((s for s in video_storage.get("sessions", []) if s["session_id"] == session_id), None)
+        local_data = await load_local_data(update, context)
+        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
         if not session:
             return None, None, None
         flight = next((f for f in session["flights"] if f["flight_id"] == flight_id), None)
@@ -219,25 +219,25 @@ async def find_video(update: Update, context: CallbackContext, session_id, fligh
         logger.error(f"Error finding video: {e}")
         return None, None, None
 
-def total_flight_time(video_storage):
+def total_flight_time(local_data):
     """
     Calculate the total flight time across all sessions.
     """
     total_time = 0
-    for session in video_storage["sessions"]:
+    for session in local_data["sessions"]:
         for flight in session["flights"]:
             total_time += flight["length"]
     return total_time
 
-def days_since_first_session(video_storage):
+def days_since_first_session(local_data):
     """
     Calculate the number of days since the first session.
     """
-    if not video_storage["sessions"]:
+    if not local_data["sessions"]:
         return 0
 
     # Find the earliest date in the sessions
-    earliest_date_str = min(session["date"] for session in video_storage["sessions"])
+    earliest_date_str = min(session["date"] for session in local_data["sessions"])
     earliest_date = datetime.strptime(earliest_date_str, "%Y_%m_%d")
     
     # Calculate the number of days since the earliest session
@@ -335,23 +335,26 @@ def add_or_update_user(update: Update, chat_id=None, username=None):
         logger.error(f"Error add_or_update_user: {e}")
         raise
 
+async def delete_message(update: Update,context: CallbackContext, chat_id, message_id):
+    await context.bot.delete_message(chat_id, message_id)
+
 # Command handlers
-async def create_storage(update: Update, context: CallbackContext, chat_id=None):
+async def create_storage_message(update: Update, context: CallbackContext, chat_id=None):
     """
     Create a new storage message and pin it in the chat.
     """
     if not chat_id:
         chat_id = update.message.chat_id
     try:
-        video_storage = {"sessions": []}
+        local_data = {"sessions": []}
         file_buffer = io.BytesIO()
-        file_buffer.write(json.dumps(video_storage).encode('utf-8'))
+        file_buffer.write(json.dumps(local_data).encode('utf-8'))
         file_buffer.seek(0)
         message = await context.bot.send_document(
             chat_id=chat_id,
             document=file_buffer,
-            filename="video_storage.json",
-            caption="This is a service message. Please, do not delete or unpin it!"
+            filename="data.json",
+            caption="This is a service message. Please, do NOT delete, unpin or pin amy onther messages in this chat! This may result in losing all your data."
         )
         await message.pin(disable_notification=True)
         logger.info("Storage message created and pinned")
@@ -360,25 +363,25 @@ async def create_storage(update: Update, context: CallbackContext, chat_id=None)
         logger.error(f"Error creating storage message: {e}")
         return None
 
-async def clear_storage(update: Update, context: CallbackContext):
+async def clear_local_data(update: Update, context: CallbackContext):
     """
     Clear the storage by resetting it to an empty state.
     """
     try:
-        video_storage = {"sessions": []}
-        await save_storage(update, context, video_storage)
+        local_data = {"sessions": []}
+        await save_local_data(update, context, local_data)
         await update.message.reply_text("All stored videos have been cleared.")
     except Exception as e:
         logger.error(f"Error clearing storage: {e}")
 
-async def show_storage(update: Update, context: CallbackContext):
+async def show_local_data(update: Update, context: CallbackContext):
     """
     Display the contents of the storage.
     """
     try:
-        video_storage = await load_storage(update, context)
+        local_data = await load_local_data(update, context)
         logger.info("Video storage contents:")
-        logger.info(json.dumps(video_storage, indent=4))
+        logger.info(json.dumps(local_data, indent=4))
     except Exception as e:
         logger.error(f"Error showing storage: {e}")
 
@@ -392,17 +395,31 @@ async def start(update: Update, context: CallbackContext, edit=0):
             await show_start_menu(update, context)
     except Exception as e:
         logger.error(f"Error start command: {e}")
-    
-async def list(update: Update, context: CallbackContext):
+        
+async def help(update: Update, context: CallbackContext):
     try:
         await update.message.delete()
-        await show_sessions(update, context, edit=1)
+        if update.message.chat_id == IFLY_CHAT_ID:
+            text = """You can send your videos to your bot after completing authentification"""
+        else:
+            text = """Awailable commands\:\n\/start \- Shows menu\n\/help \- Shows this message\n\/info \- Shows info message\n\/clear\_data \- Carefull\!\!\! Delets all saved videos\!\n\nTo upload videos \- just drop them here\. Bot will automatically find their correct flight\. Alternetively, you can send them from \@iFLYvideo account after completing authentification\."""
+
+        message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+        message_id = message.message_id
+        chat_id = update.message.chat_id
+        keyboard = [
+            [
+                InlineKeyboardButton("Close", callback_data=f"delete:{chat_id}:{message_id}"),
+            ]
+        ] 
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
-        logger.error(f"Error list command: {e}")
+        logger.error(f"Error help command: {e}")
 
 
 # JSON file handling (aka updating video storage)
-async def edit_storage(update: Update, context: CallbackContext):
+async def edit_local_data(update: Update, context: CallbackContext):
     """
     Edit the storage by updating it with a new JSON file.
     """
@@ -415,8 +432,8 @@ async def edit_storage(update: Update, context: CallbackContext):
         file_info = await context.bot.get_file(message.document.file_id)
         byte_array = await file_info.download_as_bytearray()
         data = byte_array.decode('utf-8')
-        video_storage = json.loads(data)
-        await save_storage(update, context, video_storage)
+        local_data = json.loads(data)
+        await save_local_data(update, context, local_data)
         logger.info("Storage updated manually")
         await message.delete()
     except Exception as e:
@@ -440,7 +457,7 @@ async def upload_video(update: Update, context: CallbackContext):
                 update_ifly_chat_state("no")
                 return
             chat_id = data.ifly_chat.session.chat_id
-        video_storage = await load_storage(update, context, chat_id)
+        local_data = await load_local_data(update, context, chat_id)
         video = update.message.video
         file_id = video.file_id
         file_name = video.file_name
@@ -452,13 +469,13 @@ async def upload_video(update: Update, context: CallbackContext):
         camera_name = video_info['camera_name']
         logger.info(f"Received video: file_id={file_id}, file_name={file_name}, duration={file_duration}s")
 
-        session = get_or_create_session(video_storage, date)
+        session = get_or_create_session(local_data, date)
         flight = get_or_create_flight(session, flight_number, file_duration)
 
         # Check for duplicate video across all flights in all sessions
         duplicate_found = any(
             video["filename"] == file_name
-            for session in video_storage["sessions"]
+            for session in local_data["sessions"]
             for flight in session["flights"]
             for video in flight["videos"]
         )
@@ -471,7 +488,7 @@ async def upload_video(update: Update, context: CallbackContext):
                 "camera_name": camera_name,
                 "file_id": file_id
             })
-            await save_storage(update, context, video_storage, chat_id)
+            await save_local_data(update, context, local_data, chat_id)
             logger.info(f"Video {file_name} added successfully.")
         else:
             logger.info(f"Ignoring duplicate video with filename: {file_name}")
@@ -506,7 +523,8 @@ async def inline_button(update: Update, context: CallbackContext):
                 "session": show_flights,
                 "flight": show_videos,
                 "video": open_video,
-                "auth": start_session
+                "auth": start_session,
+                "delete": delete_message
             }.get(parts[0])
             if handler:
                 await handler(query, context, *map(int, parts[1:]))
@@ -564,9 +582,9 @@ async def show_statistics(update: Update, context: CallbackContext):
             return f"{days} day\(s\)"
         
     try:
-        video_storage = await load_storage(update, context)
-        flight_time = "You have flown for " + format_flight_time(total_flight_time(video_storage))
-        days_flown = "You started flying " + format_days_count(days_since_first_session(video_storage)) + " ago"
+        local_data = await load_local_data(update, context)
+        flight_time = "You have flown for " + format_flight_time(total_flight_time(local_data))
+        days_flown = "You started flying " + format_days_count(days_since_first_session(local_data)) + " ago"
         text = "\n".join([
             "Here is some entertaining stats\:", 
             days_flown,
@@ -589,13 +607,13 @@ async def show_sessions(update: Update, context: CallbackContext, edit=0):
     """
     try:
         add_or_update_user(update)
-        video_storage = await load_storage(update, context)
-        sessions = video_storage.get("sessions", [])
+        local_data = await load_local_data(update, context)
+        sessions = local_data.get("sessions", [])
         if not sessions:
             text = "No sessions found"
             reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Home", callback_data="start:1")]])
         else:
-            text = menu_message_text(video_storage)
+            text = menu_message_text(local_data)
             session_buttons = [InlineKeyboardButton(f"Session {session['session_id']}", callback_data=f"session:{session['session_id']}") for session in sessions]
             reply_markup = InlineKeyboardMarkup([[button] for button in session_buttons] + [[InlineKeyboardButton("<- Home", callback_data="start:1")]])
         if edit == 1:
@@ -610,8 +628,8 @@ async def show_flights(update: Update, context: CallbackContext, session_id):
     Show the list of flights for a specific session.
     """
     try:
-        video_storage = await load_storage(update, context)
-        session = next((s for s in video_storage.get("sessions", []) if s["session_id"] == session_id), None)
+        local_data = await load_local_data(update, context)
+        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
         if not session:
             await update.message.reply_text("Session not found.")
             return
@@ -621,7 +639,7 @@ async def show_flights(update: Update, context: CallbackContext, session_id):
             for flight in flights
         ]
         reply_markup = InlineKeyboardMarkup([[button] for button in flight_buttons] + [[InlineKeyboardButton("<- Back", callback_data="home:1")]])
-        await update.message.edit_text(menu_message_text(video_storage, session_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
+        await update.message.edit_text(menu_message_text(local_data, session_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error showing flights: {e}")
 
@@ -630,8 +648,8 @@ async def show_videos(update: Update, context: CallbackContext, session_id, flig
     Show the list of videos for a specific flight.
     """
     try:
-        video_storage = await load_storage(update, context)
-        session = next((s for s in video_storage.get("sessions", []) if s["session_id"] == session_id), None)
+        local_data = await load_local_data(update, context)
+        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
         if not session:
             await update.message.reply_text("Session not found.")
             return
@@ -646,10 +664,10 @@ async def show_videos(update: Update, context: CallbackContext, session_id, flig
         ]
         reply_markup = InlineKeyboardMarkup([[button] for button in video_buttons] + [[InlineKeyboardButton("<- Back", callback_data=f"session:{session_id}")]])
         if action == 1:
-            await update.message.edit_text(menu_message_text(video_storage, session_id, flight_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
+            await update.message.edit_text(menu_message_text(local_data, session_id, flight_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
         elif action == 0:
             await update.message.delete()
-            await update.message.reply_text(menu_message_text(video_storage, session_id, flight_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
+            await update.message.reply_text(menu_message_text(local_data, session_id, flight_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error showing videos: {e}")
 
@@ -783,8 +801,6 @@ async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
         raise
 
 
-
-
 def main():
     """
     Main function to start the Telegram bot.
@@ -792,13 +808,14 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("list", list))
-    application.add_handler(CommandHandler("clear_storage", clear_storage))
-    application.add_handler(CommandHandler("show_storage", show_storage))
-    application.add_handler(CommandHandler("create_storage", create_storage))
+    application.add_handler(CommandHandler("help", help))
+    # application.add_handler(CommandHandler("list", list))
+    application.add_handler(CommandHandler("clear_data", clear_local_data))
+    application.add_handler(CommandHandler("show_data", show_local_data))
+    application.add_handler(CommandHandler("create_storage", create_storage_message))
     application.add_handler(MessageHandler(filters.VIDEO, upload_video))
     application.add_handler(MessageHandler(filters.User(user_id=IFLY_CHAT_ID), check_username))
-    application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_storage))
+    application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_local_data))
     application.add_handler(CallbackQueryHandler(inline_button))
 
     application.run_polling()
