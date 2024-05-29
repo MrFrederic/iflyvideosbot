@@ -9,16 +9,20 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from dotenv import load_dotenv
 
 
-# Load environment variables
-load_dotenv('.env')
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-SYSTEM_DATA_FILE = os.getenv("SYSTEM_DATA_FILE")
-IFLY_CHAT_ID = int(os.getenv("IFLY_CHAT_ID"))
-
-
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Load environment variables
+try:
+    load_dotenv('.env')
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    IFLY_CHAT_ID = int(os.getenv("IFLY_CHAT_ID"))
+except Exception:
+        logger.error(f"Error setting environment variables! Please, check your .env file")
+    
+SYSTEM_DATA_FILE = "data.json"
 
 
 # Storage functions
