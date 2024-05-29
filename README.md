@@ -12,4 +12,5 @@ You can also set up dedicated accout that bott will handle as a upload-only acco
 `BOT_TOKEN=000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA # Token you'v got from t.me/BotFather`
 
 `IFLY_CHAT_ID=1234567890 # ID for sender-only user`
+
 3. Run `python main.py`
