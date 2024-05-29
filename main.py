@@ -1,5 +1,4 @@
 from dotmap import DotMap
-import asyncio
 import logging
 import os
 import io
@@ -29,7 +28,6 @@ async def get_storage_message(update: Update, context: CallbackContext, chat_id=
     """
     if not chat_id:
         chat_id = update.message.chat_id
-        
     
     try:
         chat = await context.bot.get_chat(chat_id)
@@ -59,8 +57,10 @@ async def load_local_data(update: Update, context: CallbackContext, chat_id=None
 
         file_info = await context.bot.get_file(message.document.file_id)
         byte_array = await file_info.download_as_bytearray()
-        data = byte_array.decode('utf-8')
-        return json.loads(data)
+        data_dict = json.loads(byte_array.decode('utf-8'))
+        data = DotMap(data_dict)
+        logger.info(f"Loaded data: {data}")
+        return data
     except Exception as e:
         logger.error(f"Error while loading storage: {e}")
         return None
@@ -72,13 +72,26 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
     if not chat_id:
         chat_id = update.message.chat_id
     try:
+        logger.info(f"Saving local_data: {local_data}")
+
+        # Ensure local_data is a DotMap instance before converting
+        if isinstance(local_data, DotMap):
+            data_dict = local_data.toDict()
+        else:
+            data_dict = local_data
+
+        json_local_data = json.dumps(data_dict, indent=4).encode('utf-8')
+
+        # Properly handle the file buffer
         file_buffer = io.BytesIO()
-        file_buffer.write(json.dumps(local_data).encode('utf-8'))
+        file_buffer.write(json_local_data)
         file_buffer.seek(0)
+
         message = await get_storage_message(update, context, chat_id)
         if not message:
-            logger.error("No storage message available to save data")
+            logger.error("No storage message available to save data to")
             return None
+
         await message.edit_media(
             media=InputMediaDocument(
                 media=file_buffer,
@@ -119,7 +132,7 @@ def generate_unique_id(storage, key="session_id"):
     Generate a unique ID for sessions or videos in the storage.
     """
     try:
-        current_ids = [item[key] for item in storage]
+        current_ids = [getattr(item, key) for item in storage]
         return max(current_ids, default=0) + 1
     except Exception as e:
         logger.error(f"Error generating unique ID: {e}")
@@ -129,40 +142,42 @@ def get_or_create_session(local_data, date):
     """
     Retrieve or create a new session based on the provided date.
     """
-    try:
-        for session in local_data["sessions"]:
-            if session["date"] == date:
-                return session
-        
-        new_session = {
-            "session_id": generate_unique_id(local_data["sessions"]),
-            "date": date,
-            "flights": []
-        }
-        local_data["sessions"].append(new_session)
-        local_data["sessions"].sort(key=lambda s: datetime.strptime(s["date"], '%Y_%m_%d'))
-        for idx, session in enumerate(local_data["sessions"]):
-            session["session_id"] = idx + 1
-        return new_session
-    except Exception as e:
-        logger.error(f"Error getting or creating session: {e}")
-        raise
+    # try:
+    for session in local_data.sessions:
+        if session.date == date:
+            return session
+    
+    new_session = DotMap({
+        "session_id": generate_unique_id(local_data.sessions),
+        "date": date,
+        "flights": []
+    })
+    sessions = local_data.sessions
+    logger.info(local_data)
+    sessions.append(new_session)
+    local_data.sessions.sort(key=lambda s: datetime.strptime(s.date, '%Y_%m_%d'))
+    for idx, session in enumerate(local_data.sessions):
+        session.session_id = idx + 1
+    return session
+    # except Exception as e:
+    #     logger.error(f"Error getting or creating session: {e}")
+    #     raise
 
 def get_or_create_flight(session, flight_number, length=None):
     """
     Retrieve or create a new flight based on the provided flight number.
     """
     try:
-        for flight in session["flights"]:
-            if flight["flight_id"] == flight_number:
+        for flight in session.flights:
+            if flight.flight_id == flight_number:
                 return flight
         
-        new_flight = {
+        new_flight = DotMap({
             "flight_id": flight_number,
             "videos": [],
             "length": length
-        }
-        session["flights"].append(new_flight)
+        })
+        session.flights.append(new_flight)
         return new_flight
     except Exception as e:
         logger.error(f"Error getting or creating flight: {e}")
@@ -175,27 +190,32 @@ def menu_message_text(local_data, current_session=None, current_flight=None):
     try:
         message = []
         
-        sessions = local_data.get("sessions", [])
+        # Convert local_data to DotMap if it's not already
+        if not isinstance(local_data, DotMap):
+            local_data = DotMap(local_data)
         
-        session = next((s for s in sessions if s["session_id"] == current_session), None)
-        flights = session.get("flights", []) if session else []
+        sessions = local_data.sessions or []
         
-        flight = next((f for f in flights if f["flight_id"] == current_flight), None)
-        videos = flight.get("videos", []) if flight else []
+        session = next((s for s in sessions if s.session_id == current_session), None)
+        flights = session.flights or [] if session else []
+        
+        flight = next((f for f in flights if f.flight_id == current_flight), None)
+        videos = flight.videos or [] if flight else []
+        
         for s in sessions:
             if s == session:
-                message.append(f"\- *Session {s['session_id']}: {s['date'].replace('_','\.')}*")
+                message.append(f"\- *Session {s.session_id}: {s.date.replace('_','\.')}*")
             else:
-                message.append(f"\- Session {s['session_id']}: {s['date'].replace('_','\.')}")
+                message.append(f"\- Session {s.session_id}: {s.date.replace('_','\.')}")
             if s == session:
                 for f in flights:
                     if f == flight:
-                        message.append(f"\- \- *Flight {f['flight_id']}: {f['length']//60}:{f['length']%60} min*")
+                        message.append(f"\- \- *Flight {f.flight_id}: {f.length//60}:{f.length%60} min*")
                     else:
-                        message.append(f"\- \- Flight {f['flight_id']}: {f['length']//60}:{f['length']%60} min")
+                        message.append(f"\- \- Flight {f.flight_id}: {f.length//60}:{f.length%60} min")
                     if f == flight:
                         for v in videos:
-                            message.append(f"\- \- \- {v['camera_name']}")
+                            message.append(f"\- \- \- {v.camera_name}")
         return "\n".join(message)
     except Exception as e:
         logger.error(f"Error generating menu message text: {e}")
@@ -207,13 +227,13 @@ async def find_video(update: Update, context: CallbackContext, session_id, fligh
     """
     try:
         local_data = await load_local_data(update, context)
-        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
+        session = next((s for s in local_data.sessions if s.session_id == session_id), None)
         if not session:
             return None, None, None
-        flight = next((f for f in session["flights"] if f["flight_id"] == flight_id), None)
+        flight = next((f for f in session.flights if f.flight_id == flight_id), None)
         if not flight:
             return session, None, None
-        video = next((v for v in flight.get("videos", []) if v["video_id"] == video_id), None)
+        video = next((v for v in flight.videos if v.video_id == video_id), None)
         return session, flight, video
     except Exception as e:
         logger.error(f"Error finding video: {e}")
@@ -223,21 +243,24 @@ def total_flight_time(local_data):
     """
     Calculate the total flight time across all sessions.
     """
+    if isinstance(local_data, dict):
+        local_data = DotMap(local_data)
+    
     total_time = 0
-    for session in local_data["sessions"]:
-        for flight in session["flights"]:
-            total_time += flight["length"]
+    for session in local_data.sessions:
+        for flight in session.flights:
+            total_time += flight.length
     return total_time
 
 def days_since_first_session(local_data):
     """
     Calculate the number of days since the first session.
     """
-    if not local_data["sessions"]:
+    if not local_data.sessions:
         return 0
 
     # Find the earliest date in the sessions
-    earliest_date_str = min(session["date"] for session in local_data["sessions"])
+    earliest_date_str = min(session.date for session in local_data.sessions)
     earliest_date = datetime.strptime(earliest_date_str, "%Y_%m_%d")
     
     # Calculate the number of days since the earliest session
@@ -293,7 +316,7 @@ def update_ifly_chat_state(state):
         logger.error(f"Error update_ifly_chat_state: {e}")
         raise
     
-async def ifly_menu_message_id(context: CallbackContext):
+async def ifly_menu_message_id(context: CallbackContext, restart=0):
     try: 
         data = load_system_data()
         message_id  = data.ifly_chat.menu_message_id
@@ -302,6 +325,8 @@ async def ifly_menu_message_id(context: CallbackContext):
             data.ifly_chat.menu_message_id = message.message_id
         else:
             try:
+                if restart == 1:
+                    await context.bot.delete_message(IFLY_CHAT_ID, message_id)
                 await context.bot.edit_message_text("Loading", IFLY_CHAT_ID, message_id)
             except Exception:
                 message = await context.bot.send_message(chat_id=IFLY_CHAT_ID, text="Loading")
@@ -338,6 +363,7 @@ def add_or_update_user(update: Update, chat_id=None, username=None):
 async def delete_message(update: Update,context: CallbackContext, chat_id, message_id):
     await context.bot.delete_message(chat_id, message_id)
 
+
 # Command handlers
 async def create_storage_message(update: Update, context: CallbackContext, chat_id=None):
     """
@@ -368,9 +394,20 @@ async def clear_local_data(update: Update, context: CallbackContext):
     Clear the storage by resetting it to an empty state.
     """
     try:
+        await update.message.delete()
         local_data = {"sessions": []}
         await save_local_data(update, context, local_data)
-        await update.message.reply_text("All stored videos have been cleared.")
+        text = "All stored videos have been cleared\."
+        message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+        message_id = message.message_id
+        chat_id = update.message.chat_id
+        keyboard = [
+            [
+                InlineKeyboardButton("Close", callback_data=f"delete:{chat_id}:{message_id}"),
+            ]
+        ] 
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error clearing storage: {e}")
 
@@ -389,7 +426,7 @@ async def start(update: Update, context: CallbackContext, edit=0):
     try:
         await update.message.delete()
         if update.message.chat_id == IFLY_CHAT_ID:
-            await ask_for_username(update, context)
+            await ask_for_username(update, context, 1)
         else:
             add_or_update_user(update)
             await show_start_menu(update, context)
@@ -409,7 +446,7 @@ async def help(update: Update, context: CallbackContext):
         chat_id = update.message.chat_id
         keyboard = [
             [
-                InlineKeyboardButton("Close", callback_data=f"delete:{chat_id}:{message_id}"),
+                InlineKeyboardButton("Close", callback_data=f"delete:{update.message.chat_id}:{message.message_id}"),
             ]
         ] 
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -445,61 +482,66 @@ async def upload_video(update: Update, context: CallbackContext):
     """
     Handle video uploads by extracting metadata and storing it.
     """
-    try:
-        if not update.message.chat_id == IFLY_CHAT_ID:
-            add_or_update_user(update)
-            chat_id = update.message.chat_id
-        else:
-            data = load_system_data()
-            if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
-                text = "To upload videos - please send your username\n\nSorry, your session expired"
-                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
-                update_ifly_chat_state("no")
-                return
-            chat_id = data.ifly_chat.session.chat_id
-        local_data = await load_local_data(update, context, chat_id)
-        video = update.message.video
-        file_id = video.file_id
-        file_name = video.file_name
-        file_duration = round(video.duration / 5) * 5
+    # try:
+    if not update.message.chat_id == IFLY_CHAT_ID:
+        add_or_update_user(update)
+        chat_id = update.message.chat_id
+    else:
+        data = load_system_data()
+        if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
+            text = "To upload videos - please send your username\n\nSorry, your session expired"
+            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+            update_ifly_chat_state("no")
+            return
+        chat_id = data.ifly_chat.session.chat_id
 
-        video_info = parse_filename(file_name)
-        date = video_info['date']
-        flight_number = int(video_info['flight_number'])
-        camera_name = video_info['camera_name']
-        logger.info(f"Received video: file_id={file_id}, file_name={file_name}, duration={file_duration}s")
+    local_data = await load_local_data(update, context, chat_id)
 
-        session = get_or_create_session(local_data, date)
-        flight = get_or_create_flight(session, flight_number, file_duration)
+    video = update.message.video
+    file_id = video.file_id
+    file_name = video.file_name
+    file_duration = round(video.duration / 5) * 5
 
-        # Check for duplicate video across all flights in all sessions
-        duplicate_found = any(
-            video["filename"] == file_name
-            for session in local_data["sessions"]
-            for flight in session["flights"]
-            for video in flight["videos"]
-        )
+    video_info = parse_filename(file_name)
+    date = video_info['date']
+    flight_number = int(video_info['flight_number'])
+    camera_name = video_info['camera_name']
+    logger.info(f"Received video: file_id={file_id}, file_name={file_name}, duration={file_duration}s, date={date}, flight_number={flight_number}, camera_name={camera_name}")
 
-        if not duplicate_found:
-            video_id = generate_unique_id(flight["videos"], key="video_id")
-            flight["videos"].append({
-                "video_id": video_id,
-                "filename": file_name,
-                "camera_name": camera_name,
-                "file_id": file_id
-            })
-            await save_local_data(update, context, local_data, chat_id)
-            logger.info(f"Video {file_name} added successfully.")
-        else:
-            logger.info(f"Ignoring duplicate video with filename: {file_name}")
-        
-        await update.message.delete()
-        logger.info("Deleted the original video message.")
-    except ValueError as e:
-        await update.message.reply_text(str(e))
-        logger.error(f"Value error in upload_video: {e}")
-    except Exception as e:
-        logger.error(f"Error uploading video: {e}")
+    session = get_or_create_session(local_data, date)
+    logger.info(f"New local_data = {local_data}")
+    
+    flight = get_or_create_flight(session, flight_number, file_duration)
+    logger.info(f"New local_data = {local_data}")
+    
+    # Check for duplicate video across all flights in all sessions
+    duplicate_found = any(
+        video.filename == file_name
+        for session in local_data.sessions
+        for flight in session.flights
+        for video in flight.videos
+    )
+
+    if not duplicate_found:
+        video_id = generate_unique_id(flight.videos, key="video_id")
+        flight.videos.append({
+            "video_id": video_id,
+            "filename": file_name,
+            "camera_name": camera_name,
+            "file_id": file_id
+        })
+        await save_local_data(update, context, local_data, chat_id)
+        logger.info(f"Video {file_name} added successfully.")
+    else:
+        logger.info(f"Ignoring duplicate video with filename: {file_name}")
+    
+    await update.message.delete()
+    logger.info("Deleted the original video message.")
+    # except ValueError as e:
+    #     await update.message.reply_text(str(e))
+    #     logger.error(f"Value error in upload_video: {e}")
+    # except Exception as e:
+    #     logger.error(f"Error uploading video: {e}")
 
 
 # Inline button handling
@@ -560,16 +602,16 @@ async def show_statistics(update: Update, context: CallbackContext):
     """
     
     def format_flight_time(seconds):
-            hours, remainder = divmod(seconds, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            
-            if hours > 0:
-                return f"{hours} hour \: {minutes} min \: {seconds} sec"
-            elif minutes > 0:
-                return f"{minutes} min \: {seconds} sec"
-            else:
-                return f"{seconds} sec"
-            
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if hours > 0:
+            return f"{hours} hour \: {minutes} min \: {seconds} sec"
+        elif minutes > 0:
+            return f"{minutes} min \: {seconds} sec"
+        else:
+            return f"{seconds} sec"
+        
     def format_days_count(days):
         years, remainder = divmod(days, 365)
         months, days = divmod(remainder, 30)
@@ -599,7 +641,7 @@ async def show_statistics(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
-        logger.error(f"Error sending start message: {e}")
+        logger.error(f"Error sending stats message: {e}")
 
 async def show_sessions(update: Update, context: CallbackContext, edit=0):
     """
@@ -608,13 +650,15 @@ async def show_sessions(update: Update, context: CallbackContext, edit=0):
     try:
         add_or_update_user(update)
         local_data = await load_local_data(update, context)
-        sessions = local_data.get("sessions", [])
+        if not isinstance(local_data, DotMap):  # Ensure local_data is DotMap
+            local_data = DotMap(local_data)
+        sessions = local_data.get("sessions", [])  # Access sessions attribute as you would with a dictionary
         if not sessions:
             text = "No sessions found"
             reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Home", callback_data="start:1")]])
         else:
             text = menu_message_text(local_data)
-            session_buttons = [InlineKeyboardButton(f"Session {session['session_id']}", callback_data=f"session:{session['session_id']}") for session in sessions]
+            session_buttons = [InlineKeyboardButton(f"Session {session.session_id}", callback_data=f"session:{session.session_id}") for session in sessions]
             reply_markup = InlineKeyboardMarkup([[button] for button in session_buttons] + [[InlineKeyboardButton("<- Home", callback_data="start:1")]])
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
@@ -629,13 +673,25 @@ async def show_flights(update: Update, context: CallbackContext, session_id):
     """
     try:
         local_data = await load_local_data(update, context)
-        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
+        if isinstance(local_data, dict):  # Check if local_data is a dictionary
+            local_data = DotMap(local_data)  # Convert to DotMap if it's a dictionary
+        session = next((s for s in local_data.sessions if s.session_id == session_id), None)
         if not session:
-            await update.message.reply_text("Session not found.")
+            await show_start_menu(update, context, 1)
+            
+            text = "Session not found"
+            message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+            keyboard = [
+                [
+                    InlineKeyboardButton("Close", callback_data=f"delete:{update.message.chat_id}:{message.message_id}"),
+                ]
+            ] 
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             return
-        flights = session.get("flights", [])
+        flights = session.flights
         flight_buttons = [
-            InlineKeyboardButton(f"Flight {flight['flight_id']}", callback_data=f"flight:{session_id}:{flight['flight_id']}")
+            InlineKeyboardButton(f"Flight {flight.flight_id}", callback_data=f"flight:{session_id}:{flight.flight_id}")
             for flight in flights
         ]
         reply_markup = InlineKeyboardMarkup([[button] for button in flight_buttons] + [[InlineKeyboardButton("<- Back", callback_data="home:1")]])
@@ -649,17 +705,37 @@ async def show_videos(update: Update, context: CallbackContext, session_id, flig
     """
     try:
         local_data = await load_local_data(update, context)
-        session = next((s for s in local_data.get("sessions", []) if s["session_id"] == session_id), None)
+        session = next((s for s in local_data.sessions if s.session_id == session_id), None)
         if not session:
-            await update.message.reply_text("Session not found.")
+            await show_start_menu(update, context, 1)
+            
+            text = "Session not found"
+            message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+            keyboard = [
+                [
+                    InlineKeyboardButton("Close", callback_data=f"delete:{update.message.chat_id}:{message.message_id}"),
+                ]
+            ] 
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             return
-        flight = next((f for f in session["flights"] if f["flight_id"] == flight_id), None)
+        flight = next((f for f in session.flights if f.flight_id == flight_id), None)
         if not flight:
-            await update.message.reply_text("Flight not found.")
+            await show_start_menu(update, context, 1)
+            
+            text = "Flight not found"
+            message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+            keyboard = [
+                [
+                    InlineKeyboardButton("Close", callback_data=f"delete:{update.message.chat_id}:{message.message_id}"),
+                ]
+            ] 
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             return
-        videos = flight.get("videos", [])
+        videos = flight.videos
         video_buttons = [
-            InlineKeyboardButton(f"{video['camera_name']}", callback_data=f"video:{session_id}:{flight_id}:{video['video_id']}")
+            InlineKeyboardButton(f"{video.camera_name}", callback_data=f"video:{session_id}:{flight_id}:{video.video_id}")
             for video in videos
         ]
         reply_markup = InlineKeyboardMarkup([[button] for button in video_buttons] + [[InlineKeyboardButton("<- Back", callback_data=f"session:{session_id}")]])
@@ -678,10 +754,20 @@ async def open_video(update: Update, context: CallbackContext, session_id, fligh
     try:
         session, flight, video = await find_video(update, context, session_id, flight_id, video_id)
         if not video:
-            await update.message.reply_text("Video not found.")
+            await show_start_menu(update, context, 1)
+            
+            text = "Video not found"
+            message = await update.message.reply_text(text, parse_mode='MarkdownV2')
+            keyboard = [
+                [
+                    InlineKeyboardButton("Close", callback_data=f"delete:{update.message.chat_id}:{message.message_id}"),
+                ]
+            ] 
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             return
         back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Back", callback_data=f"flight:{session_id}:{flight_id}:0")]])
-        await context.bot.send_video(chat_id=update.message.chat_id, video=video["file_id"], reply_markup=back_markup)
+        await context.bot.send_video(chat_id=update.message.chat_id, video=video.file_id, reply_markup=back_markup)
         await update.message.delete()
     except Exception as e:
         logger.error(f"Error opening video: {e}")
@@ -689,11 +775,11 @@ async def open_video(update: Update, context: CallbackContext, session_id, fligh
 
 
 # Ifly chat functions
-async def ask_for_username(update: Update, context: CallbackContext):
+async def ask_for_username(update: Update, context: CallbackContext, restart=0):
     # prompts user with username to upload videos to
     try:
         text = "To upload videos - please send your username"
-        await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+        await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context, restart))
     except Exception as e:
         logger.error(f"Error ask_for_username: {e}")
         raise
