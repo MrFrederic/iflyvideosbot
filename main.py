@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 
 # Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 
@@ -193,6 +193,7 @@ def menu_message_text(local_data, current_session=None, current_flight=None):
     """
     try:
         message = []
+        message.append(f"📦 *Library*")
         
         # Convert local_data to DotMap if it's not already
         if not isinstance(local_data, DotMap):
@@ -206,20 +207,39 @@ def menu_message_text(local_data, current_session=None, current_flight=None):
         flight = next((f for f in flights if f.flight_id == current_flight), None)
         videos = flight.videos or [] if flight else []
         
-        for s in sessions:
+        for index_s, s in enumerate(sessions):
             if s == session:
-                message.append(f"\- *Session {s.session_id}: {s.date.replace('_','\.')}*")
+                text = f"` ┣━` 📂 *Session {s.session_id}:* _{s.date.replace('_','\.')}_"
             else:
-                message.append(f"\- Session {s.session_id}: {s.date.replace('_','\.')}")
+                text = f"` ┣━` 📁 Session {s.session_id}: _{s.date.replace('_','\.')}_"
+            if index_s == len(sessions) - 1:
+                text = text.replace('┣','┗')
+            message.append(text)
             if s == session:
-                for f in flights:
+                for index_f, f in enumerate(flights):
                     if f == flight:
-                        message.append(f"\- \- *Flight {f.flight_id}: {f.length//60}:{f.length%60} min*")
+                        text = f"` ┃  ┣━` 📂 *Flight {f.flight_id}:* _{f.length//60}:{f.length%60} min_"
                     else:
-                        message.append(f"\- \- Flight {f.flight_id}: {f.length//60}:{f.length%60} min")
+                        text = f"` ┃  ┣━` 📁 Flight {f.flight_id}: _{f.length//60}:{f.length%60} min_"
+                    if index_f == len(flights) - 1:
+                        text = text.replace('┣','┗')
+                    if index_s == len(sessions) - 1:
+                        text = text.replace('┃',' ')
+                    message.append(text)
                     if f == flight:
-                        for v in videos:
-                            message.append(f"\- \- \- {v.camera_name}")
+                        for index_v, v in enumerate(videos):
+                            text = f"` ┃  ┃  ┣━` 📹 {v.camera_name}"
+                            if index_v == len(videos) - 1:
+                                text = text.replace('┣','┗')
+                            if index_s == len(sessions) - 1:
+                                if index_f == len(flights) - 1:
+                                    text = text.replace('┃',' ')
+                                else:
+                                    text = text.replace(" ┃  ┃  ","    ┃  ")
+                            else:
+                                if index_f == len(flights) - 1:
+                                    text = text.replace(" ┃  ┃  "," ┃     ")
+                            message.append(text)
         return "\n".join(message)
     except Exception as e:
         logger.error(f"Error generating menu message text: {e}")
@@ -384,7 +404,7 @@ async def create_storage_message(update: Update, context: CallbackContext, chat_
             chat_id=chat_id,
             document=file_buffer,
             filename="data.json",
-            caption="This is a service message. Please, do NOT delete, unpin or pin amy onther messages in this chat! This may result in losing all your data."
+            caption="This is a service message. Please, do not delete or unpin it!"
         )
         await message.pin(disable_notification=True)
         logger.info("Storage message created and pinned")
@@ -486,66 +506,67 @@ async def upload_video(update: Update, context: CallbackContext):
     """
     Handle video uploads by extracting metadata and storing it.
     """
-    # try:
-    if not update.message.chat_id == IFLY_CHAT_ID:
-        add_or_update_user(update)
-        chat_id = update.message.chat_id
-    else:
-        data = load_system_data()
-        if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
-            text = "To upload videos - please send your username\n\nSorry, your session expired"
-            await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
-            update_ifly_chat_state("no")
-            return
-        chat_id = data.ifly_chat.session.chat_id
+    try:
+        if not update.message.chat_id == IFLY_CHAT_ID:
+            add_or_update_user(update)
+            chat_id = update.message.chat_id
+        else:
+            data = load_system_data()
+            if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
+                text = "To upload videos - please send your username\n\nSorry, your session expired"
+                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+                update_ifly_chat_state("no")
+                return
+            chat_id = data.ifly_chat.session.chat_id
 
-    local_data = await load_local_data(update, context, chat_id)
+        local_data = await load_local_data(update, context, chat_id)
 
-    video = update.message.video
-    file_id = video.file_id
-    file_name = video.file_name
-    file_duration = round(video.duration / 5) * 5
+        video = update.message.video
+        file_id = video.file_id
+        file_name = video.file_name
+        file_duration = round(video.duration / 5) * 5
 
-    video_info = parse_filename(file_name)
-    date = video_info['date']
-    flight_number = int(video_info['flight_number'])
-    camera_name = video_info['camera_name']
-    logger.info(f"Received video: file_id={file_id}, file_name={file_name}, duration={file_duration}s, date={date}, flight_number={flight_number}, camera_name={camera_name}")
+        video_info = parse_filename(file_name)
+        date = video_info['date']
+        flight_number = int(video_info['flight_number'])
+        camera_name = video_info['camera_name']
+        logger.info(f"Received video: file_id={file_id}, file_name={file_name}, duration={file_duration}s, date={date}, flight_number={flight_number}, camera_name={camera_name}")
 
-    session = get_or_create_session(local_data, date)
-    logger.info(f"New local_data = {local_data}")
-    
-    flight = get_or_create_flight(session, flight_number, file_duration)
-    logger.info(f"New local_data = {local_data}")
-    
-    # Check for duplicate video across all flights in all sessions
-    duplicate_found = any(
-        video.filename == file_name
-        for session in local_data.sessions
-        for flight in session.flights
-        for video in flight.videos
-    )
+        session = get_or_create_session(local_data, date)
+        logger.info(f"New local_data = {local_data}")
+        
+        flight = get_or_create_flight(session, flight_number, file_duration)
+        logger.info(f"New local_data = {local_data}")
+        
+        # Check for duplicate video across all flights in all sessions
+        duplicate_found = any(
+            video.filename == file_name
+            for session in local_data.sessions
+            for flight in session.flights
+            for video in flight.videos
+        )
 
-    if not duplicate_found:
-        video_id = generate_unique_id(flight.videos, key="video_id")
-        flight.videos.append({
-            "video_id": video_id,
-            "filename": file_name,
-            "camera_name": camera_name,
-            "file_id": file_id
-        })
-        await save_local_data(update, context, local_data, chat_id)
-        logger.info(f"Video {file_name} added successfully.")
-    else:
-        logger.info(f"Ignoring duplicate video with filename: {file_name}")
-    
-    await update.message.delete()
-    logger.info("Deleted the original video message.")
-    # except ValueError as e:
-    #     await update.message.reply_text(str(e))
-    #     logger.error(f"Value error in upload_video: {e}")
-    # except Exception as e:
-    #     logger.error(f"Error uploading video: {e}")
+        if not duplicate_found:
+            video_id = generate_unique_id(flight.videos, key="video_id")
+            flight.videos.append({
+                "video_id": video_id,
+                "filename": file_name,
+                "camera_name": camera_name,
+                "file_id": file_id
+            })
+            await save_local_data(update, context, local_data, chat_id)
+            logger.info(f"Video {file_name} added successfully.")
+        else:
+            logger.info(f"Ignoring duplicate video with filename: {file_name}")
+            pass
+        
+        await update.message.delete()
+        logger.info("Deleted the original video message.")
+    except ValueError as e:
+        await update.message.reply_text(str(e))
+        logger.error(f"Value error in upload_video: {e}")
+    except Exception as e:
+        logger.error(f"Error uploading video: {e}")
 
 
 # Inline button handling
@@ -585,11 +606,11 @@ async def show_start_menu(update: Update, context: CallbackContext, edit=0):
     Start menu
     """
     try:
-        text = "Welcome to the Bodyflight Video Bot\! Use buttons to navigate\."
+        text = "🏠 Welcome to the *iFLY Video Storage Bot*\!\nUse buttons to navigate\."
         keyboard = [
             [
-                InlineKeyboardButton("Browse Videos", callback_data="home:1"),
-                InlineKeyboardButton("My Stats", callback_data="stats"),
+                InlineKeyboardButton("🎥 Browse Videos", callback_data="home:1"),
+                InlineKeyboardButton("📊 My Stats", callback_data="stats"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -610,11 +631,11 @@ async def show_statistics(update: Update, context: CallbackContext):
         minutes, seconds = divmod(remainder, 60)
         
         if hours > 0:
-            return f"{hours} hour \: {minutes} min \: {seconds} sec"
+            return f"{hours} hours\, {minutes} minutes and {seconds} seconds"
         elif minutes > 0:
-            return f"{minutes} min \: {seconds} sec"
+            return f"{minutes} minutes and {seconds} seconds"
         else:
-            return f"{seconds} sec"
+            return f"{seconds} seconds"
         
     def format_days_count(days):
         years, remainder = divmod(days, 365)
@@ -629,17 +650,17 @@ async def show_statistics(update: Update, context: CallbackContext):
         
     try:
         local_data = await load_local_data(update, context)
-        flight_time = "You have flown for " + format_flight_time(total_flight_time(local_data))
-        days_flown = "You started flying " + format_days_count(days_since_first_session(local_data)) + " ago"
+        days_flown = "`  `*•*` `🛫 You started flying *" + format_days_count(days_since_first_session(local_data)) + "ago*"
+        flight_time = "`  `*•*` `⏱️ Total tunnel time: *" + format_flight_time(total_flight_time(local_data)) + "*"
         text = "\n".join([
-            "Here is some entertaining stats\:", 
+            "📊 *Here are some fun stats*\:", 
             days_flown,
             flight_time
         ])
         
         keyboard = [
             [
-                InlineKeyboardButton("<- Back", callback_data="start:1")
+                InlineKeyboardButton("← Back", callback_data="start:1")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -659,11 +680,11 @@ async def show_sessions(update: Update, context: CallbackContext, edit=0):
         sessions = local_data.get("sessions", [])  # Access sessions attribute as you would with a dictionary
         if not sessions:
             text = "No sessions found"
-            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Home", callback_data="start:1")]])
+            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start:1")]])
         else:
             text = menu_message_text(local_data)
             session_buttons = [InlineKeyboardButton(f"Session {session.session_id}", callback_data=f"session:{session.session_id}") for session in sessions]
-            reply_markup = InlineKeyboardMarkup([[button] for button in session_buttons] + [[InlineKeyboardButton("<- Home", callback_data="start:1")]])
+            reply_markup = InlineKeyboardMarkup([[button] for button in session_buttons] + [[InlineKeyboardButton("🏠 Home", callback_data="start:1")]])
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
         else:
@@ -698,7 +719,7 @@ async def show_flights(update: Update, context: CallbackContext, session_id):
             InlineKeyboardButton(f"Flight {flight.flight_id}", callback_data=f"flight:{session_id}:{flight.flight_id}")
             for flight in flights
         ]
-        reply_markup = InlineKeyboardMarkup([[button] for button in flight_buttons] + [[InlineKeyboardButton("<- Back", callback_data="home:1")]])
+        reply_markup = InlineKeyboardMarkup([[button] for button in flight_buttons] + [[InlineKeyboardButton("← Back", callback_data="home:1")]])
         await update.message.edit_text(menu_message_text(local_data, session_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error showing flights: {e}")
@@ -742,7 +763,7 @@ async def show_videos(update: Update, context: CallbackContext, session_id, flig
             InlineKeyboardButton(f"{video.camera_name}", callback_data=f"video:{session_id}:{flight_id}:{video.video_id}")
             for video in videos
         ]
-        reply_markup = InlineKeyboardMarkup([[button] for button in video_buttons] + [[InlineKeyboardButton("<- Back", callback_data=f"session:{session_id}")]])
+        reply_markup = InlineKeyboardMarkup([[button] for button in video_buttons] + [[InlineKeyboardButton("← Back", callback_data=f"session:{session_id}")]])
         if action == 1:
             await update.message.edit_text(menu_message_text(local_data, session_id, flight_id), parse_mode='MarkdownV2', reply_markup=reply_markup)
         elif action == 0:
@@ -770,7 +791,7 @@ async def open_video(update: Update, context: CallbackContext, session_id, fligh
             reply_markup = InlineKeyboardMarkup(keyboard)
             await message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             return
-        back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("<- Back", callback_data=f"flight:{session_id}:{flight_id}:0")]])
+        back_markup = InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data=f"flight:{session_id}:{flight_id}:0")]])
         await context.bot.send_video(chat_id=update.message.chat_id, video=video.file_id, reply_markup=back_markup)
         await update.message.delete()
     except Exception as e:
