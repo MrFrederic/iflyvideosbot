@@ -100,7 +100,7 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
             media=InputMediaDocument(
                 media=file_buffer,
                 filename="data.json",
-                caption="This is a service message. Please, do not delete or unpin it!"
+                caption="This is a service message. Do NOT delete or unpin it unless you want to lose your videos!"
             )
         )
         logger.info("Storage message updated.")
@@ -404,7 +404,7 @@ async def create_storage_message(update: Update, context: CallbackContext, chat_
             chat_id=chat_id,
             document=file_buffer,
             filename="data.json",
-            caption="This is a service message. Please, do not delete or unpin it!"
+            caption="This is a service message. Do NOT delete or unpin it unless you want to lose your videos!"
         )
         await message.pin(disable_notification=True)
         logger.info("Storage message created and pinned")
@@ -929,6 +929,8 @@ def main():
     application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_local_data))
     application.add_handler(CallbackQueryHandler(inline_button))
 
+    print("iFLY Videos Bot Online")
+    
     application.run_polling()
 
 if __name__ == "__main__":
