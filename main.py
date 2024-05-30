@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 
 # Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
 log = logging.getLogger(__name__)
 
 
