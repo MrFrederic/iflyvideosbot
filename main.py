@@ -249,7 +249,7 @@ def generate_tree(local_data, day_p=None, session_p=None, flight_p=None):
         return f"{minutes}\:{seconds:02d} min"
     
     try:
-        tree_text = ["━━━━━━━━━━━━━━━━"" 📦 *Library*"]
+        tree_text = ["━━━━━━━━━━━━━━━━"," 📦 *Library*"]
         
         days = local_data.days
         for index_d, day in enumerate(days):
@@ -334,7 +334,8 @@ def generate_tree(local_data, day_p=None, session_p=None, flight_p=None):
                                     line.append(f"📹 {video.camera_name}")
                                     
                                     tree_text.append(''.join(line))
-        return "\n".join(tree_text.append("━━━━━━━━━━━━━━━━"))
+        tree_text.append("━━━━━━━━━━━━━━━━")
+        return "\n".join(tree_text)
     except Exception as e:
         log.error(f"Error generating menu message text: {e}")
         raise
