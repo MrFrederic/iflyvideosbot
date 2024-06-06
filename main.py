@@ -753,7 +753,7 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
             if day == None:
                 container = local_data.days
                 buttons = [InlineKeyboardButton(f"{datetime.fromtimestamp(element.date).strftime('%d.%m.%Y')}", callback_data=f"nav:1:{id}") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"home:1")]])
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"home:1")]])
             elif session == None:
                 container = local_data.days[day].sessions
                 buttons = [InlineKeyboardButton(f"Session {id + 1} ({element.time_slot})", callback_data=f"nav:1:{day}:{id}") for id, element in enumerate(container)]
@@ -761,11 +761,11 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
             elif flight == None:
                 container = local_data.days[day].sessions[session].flights
                 buttons = [InlineKeyboardButton(f"Flight {element.flight_number}", callback_data=f"nav:1:{day}:{session}:{id}") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
             else:
                 container = local_data.days[day].sessions[session].flights[flight].videos
                 buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
     
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
@@ -782,7 +782,9 @@ async def open_video(update: Update, context: CallbackContext, day, session, fli
     """
     try:
         local_data = await load_local_data(update, context)
-        file_id = local_data.days[day].sessions[session].flights[flight].videos[video].file_id
+        video = local_data.days[day].sessions[session].flights[flight].videos[video]
+        file_id = video.file_id
+        file_name = video.file_name
         if not file_id:
             await show_start_menu(update, context, 1)
             
@@ -790,7 +792,7 @@ async def open_video(update: Update, context: CallbackContext, day, session, fli
             await send_closable_message(update, text)
             return
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}:{flight}:0")]])
-        await context.bot.send_video(chat_id=update.message.chat_id, video=file_id, reply_markup=reply_markup)
+        await context.bot.send_video(chat_id=update.message.chat_id, video=file_id, caption=file_name, reply_markup=reply_markup)
         await update.message.delete()
     except Exception as e:
         log.error(f"open_video: {e}")
