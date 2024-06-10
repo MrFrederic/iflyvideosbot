@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 
 # Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
@@ -235,6 +235,34 @@ def get_or_create_flight(session, flight_number, length):
     except Exception as e:
         log.error(f"Error getting or creating flight: {e}")
         raise
+
+def sort_videos_by_camera(flight):
+    camera_order = ["Door", "Centerline", "Firsttimer", "Sideline"]
+    
+    if flight.videos:
+        # Create a mapping from camera name to its index in the order list
+        camera_order_index = {camera: index for index, camera in enumerate(camera_order)}
+        
+        # Sort the videos based on the camera order index, videos with camera names not in the list will be placed at the end
+        sorted_videos = sorted(flight.videos, key=lambda video: camera_order_index.get(video.camera_name, len(camera_order)))
+        
+        # Handle duplicates by grouping videos with the same camera name together while keeping the specified order
+        sorted_videos_by_name = []
+        seen_cameras = set()
+        for camera in camera_order:
+            for video in sorted_videos:
+                if video.camera_name == camera and video.camera_name not in seen_cameras:
+                    sorted_videos_by_name.extend([v for v in sorted_videos if v.camera_name == camera])
+                    seen_cameras.add(camera)
+        
+        # Append videos with camera names not in the specified order at the end
+        for video in sorted_videos:
+            if video.camera_name not in camera_order:
+                sorted_videos_by_name.append(video)
+        
+        # Update the flight object with sorted videos
+        flight.videos = sorted_videos_by_name
+    return flight
 
 
 def generate_tree(local_data, day_p=None, session_p=None, flight_p=None):
@@ -546,6 +574,34 @@ async def help(update: Update, context: CallbackContext):
         await send_closable_message(update, text)
     except Exception as e:
         log.error(f"Error help command: {e}")
+        
+async def regenerate_local_data(update: Update, context: CallbackContext):
+    try:
+        await update.message.delete()
+        data = load_system_data()
+        for user in data.users:
+            local_data = await load_local_data(update, context, user.chat_id)
+            gathered_videos = []
+            for day in local_data.days:
+                for session in day.sessions:
+                    for flight in session.flights:
+                        length = flight.length
+                        for video in flight.videos:
+                            file_id = video.file_id
+                            file_name = video.file_name
+                            video_info = {
+                                "file_name": file_name,
+                                "file_id": file_id,
+                                "length": length
+                            }
+                            gathered_videos.append(video_info)
+                            
+            local_data = DotMap({"days": []})
+            for v in gathered_videos:
+                local_data = await process_video(DotMap(local_data), v["file_name"], v["file_id"], v["length"])
+            await save_local_data(update, context, local_data, user.chat_id)
+    except Exception as e:
+        log.error(f"Error regenerating local_data: {e}")
 
 
 # JSON file handling (aka updating video storage)
@@ -596,13 +652,25 @@ async def upload_video(update: Update, context: CallbackContext):
         file_name = video.file_name
         length = round(video.duration / 5) * 5
 
+        local_data = await process_video(local_data, file_name, file_id, length)
+        if local_data:
+            await save_local_data(update, context, local_data, chat_id)
+            log.info(f"Video {file_name} added successfully.")
+        
+        await update.message.delete()
+        
+    except Exception as e:
+        log.error(f"Error upload_video: {e}")
+
+async def process_video(local_data, file_name, file_id, length):
+    """
+    Process information about video to return updated local_data object
+    """
+    try:    
+
         date, time_slot, flight_number, camera_name = parse_filename(file_name)
 
         log.info(f"Received video: file_id={file_id}, file_name={file_name}, length={length}s, date={date}, time_slot={time_slot}, flight_number={flight_number}, camera_name={camera_name}")
-
-        # day = get_or_create_day(local_data, date)
-        # session = get_or_create_session(day, time_slot)
-        # flight = get_or_create_flight(session, flight_number, length)
         
         flight = get_or_create_flight(get_or_create_session(get_or_create_day(local_data, date), time_slot), flight_number, length)
         
@@ -617,21 +685,20 @@ async def upload_video(update: Update, context: CallbackContext):
 
         if not duplicate_found:
             video_id = generate_unique_video_id(local_data)
-            flight.videos.append({
+            flight.videos.append(DotMap({
                 "video_id": video_id,
                 "camera_name": camera_name,
                 "file_name": file_name,
                 "file_id": file_id
-            })
-            await save_local_data(update, context, local_data, chat_id)
-            log.info(f"Video {file_name} added successfully.")
+            }))
+            sort_videos_by_camera(flight)
+            return local_data
         else:
             log.info(f"Ignoring duplicate video with filename: {file_name}")
-            pass
-        await update.message.delete()
+            return None
     except Exception as e:
-        log.error(f"Error upload_video: {e}")
-
+        log.error(f"Error process_video: {e}")
+    
 
 # Inline button handling
 async def inline_button(update: Update, context: CallbackContext): # Update handlers for new menu message function
@@ -660,7 +727,6 @@ async def inline_button(update: Update, context: CallbackContext): # Update hand
                 await handler(query, context, *map(int, parts[1:]))
     except Exception as e:
         log.error(f"Error handling callback data: {e}")
-        # await query.message.reply_text(f"An error occurred while processing button: {e}")
 
 
 # Menu display functions
@@ -764,7 +830,7 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
             else:
                 container = local_data.days[day].sessions[session].flights[flight].videos
-                buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}") for id, element in enumerate(container)]
+                buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:0") for id, element in enumerate(container)]
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
     
         if edit == 1:
@@ -776,13 +842,14 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
     except Exception as e:
         log.error(f"Error navigate_tree: {e}")
 
-async def open_video(update: Update, context: CallbackContext, day, session, flight, video):
+async def open_video(update: Update, context: CallbackContext, day, session, flight, video, edit=0):
     """
     Open and display a specific video.
     """
     try:
         local_data = await load_local_data(update, context)
-        video = local_data.days[day].sessions[session].flights[flight].videos[video]
+        flight_obj = local_data.days[day].sessions[session].flights[flight]
+        video = flight_obj.videos[video]
         file_id = video.file_id
         file_name = video.file_name
         if not file_id:
@@ -791,9 +858,25 @@ async def open_video(update: Update, context: CallbackContext, day, session, fli
             text = "Video not found"
             await send_closable_message(update, text)
             return
-        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}:{flight}:0")]])
-        await context.bot.send_video(chat_id=update.message.chat_id, video=file_id, caption=file_name, reply_markup=reply_markup)
-        await update.message.delete()
+        
+        camera_sellector = []
+        for id, v in enumerate(flight_obj.videos):
+            if not v.video_id == video.video_id:
+                camera_sellector.append(InlineKeyboardButton(f"{v.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:1"))
+            else:
+                camera_sellector.append(InlineKeyboardButton(f"-> {v.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:1"))
+                
+        keyboard = [camera_sellector, [InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}:{flight}:0")]] 
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if edit == 0:
+            await context.bot.send_video(chat_id=update.message.chat_id, video=file_id, caption=file_name, reply_markup=reply_markup)
+            await update.message.delete()
+        else:
+            media=InputMediaDocument(
+                media=file_id,
+                caption=file_name
+            )
+            await context.bot.edit_message_media(media, chat_id=update.message.chat_id, message_id=update.message.message_id, reply_markup=reply_markup)
     except Exception as e:
         log.error(f"open_video: {e}")
 
@@ -922,6 +1005,7 @@ def main():
     application.add_handler(CommandHandler("clear_data", clear_local_data))
     application.add_handler(CommandHandler("show_data", show_local_data))
     application.add_handler(CommandHandler("create_storage", create_storage_message))
+    application.add_handler(CommandHandler("repair_all_local_data_files", regenerate_local_data))
     application.add_handler(MessageHandler(filters.VIDEO, upload_video))
     application.add_handler(MessageHandler(filters.User(user_id=IFLY_CHAT_ID), check_username))
     application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_local_data))
