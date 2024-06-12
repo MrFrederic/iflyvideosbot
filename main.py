@@ -271,7 +271,7 @@ def sort_videos_by_camera(flight):
     return flight
 
 
-def generate_tree(local_data, day_p=None, session_p=None, flight_p=None):
+def generate_tree(local_data, day_p=None, session_p=None):
     """
     Generate the menu message text for the current video storage state.
     """
@@ -322,52 +322,6 @@ def generate_tree(local_data, day_p=None, session_p=None, flight_p=None):
                         line.append(f"_\({session.time_slot}\)_")
                         
                         tree_text.append(''.join(line))  
-                                   
-                    if session_p == index_s:
-                        flights = session.flights
-                        for index_f, flight in enumerate(flights):
-                            line = ["`"]
-                    
-                            if index_d + 1 == len(days): line.append("   ")
-                            else: line.append(" ┃ ")
-
-                            if len(sessions) > 1:
-                                if index_s + 1 == len(sessions): line.append("   ")
-                                else: line.append(" ┃ ")
-                            
-                            if index_f + 1 == len(flights): line.append(" ┗━` ")
-                            else: line.append(" ┣━` ")
-                            
-                            if flight_p == index_f: line.append("📂 ")
-                            else: line.append("📁 ")
-                            
-                            if flight_p == index_f: line.append(f"*")
-                            line.append(f"Flight {flight.flight_number} ")
-                            if flight_p == index_f: line.append(f"*")
-                            line.append(f"_{format_flight_length(flight.length)}_")
-                            
-                            tree_text.append(''.join(line))
-                            if flight_p == index_f:
-                                videos = flight.videos
-                                for index_v, video in enumerate(videos):
-                                    line = ["`"]
-                    
-                                    if index_d + 1 == len(days): line.append("   ")
-                                    else: line.append(" ┃ ")
-                            
-                                    if len(sessions) > 1:
-                                        if index_s + 1 == len(sessions): line.append("   ")
-                                        else: line.append(" ┃ ")
-                                    
-                                    if index_f + 1 == len(flights): line.append("   ")
-                                    else: line.append(" ┃ ")
-                                    
-                                    if index_v + 1 == len(videos): line.append(" ┗━` ")
-                                    else: line.append(" ┣━` ")
-                                    
-                                    line.append(f"📹 {video.camera_name}")
-                                    
-                                    tree_text.append(''.join(line))
         tree_text.append("━━━━━━━━━━━━━━━━")
         return "\n".join(tree_text)
     except Exception as e:
@@ -999,6 +953,9 @@ async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
         log.error(f"Error ask_for_username: {e}")
         raise
 
+async def logout(update: Update, context: CallbackContext, user_id):
+    pass
+    
 
 def main():
     """
