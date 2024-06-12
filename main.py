@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 
 # Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
 log = logging.getLogger(__name__)
 
 
@@ -47,32 +47,37 @@ async def get_storage_message(update: Update, context: CallbackContext, chat_id=
         log.error(f"Error retrieving storage message: {e}")
         return None
 
-async def load_local_data(update: Update, context: CallbackContext, chat_id=None):
+async def load_local_data(update: Update, context: CallbackContext, p_chat_id=None):
     """
     Load the JSON storage from the pinned message document.
     """
-    if not chat_id:
+    if not p_chat_id:
         chat_id = update.message.chat_id
     try:
-        message = await get_storage_message(update, context, chat_id)
-        if not message or not message.document:
-            log.error("Pinned message doesn't contain document")
-            return None
+        data = None
+        if not p_chat_id:
+            data = DotMap(context.user_data)
+            
+        if not data:
+            message = await get_storage_message(update, context, chat_id)
+            if not message or not message.document:
+                log.error("Pinned message doesn't contain document")
+                return None
 
-        file_info = await context.bot.get_file(message.document.file_id)
-        byte_array = await file_info.download_as_bytearray()
-        data_dict = json.loads(byte_array.decode('utf-8'))
-        data = DotMap(data_dict)
+            file_info = await context.bot.get_file(message.document.file_id)
+            byte_array = await file_info.download_as_bytearray()
+            data = DotMap(json.loads(byte_array.decode('utf-8')))
+            context.user_data.update(data.toDict())
         return data
     except Exception as e:
         log.error(f"Error while loading storage: {e}")
         return None
 
-async def save_local_data(update: Update, context: CallbackContext, local_data, chat_id=None):
+async def save_local_data(update: Update, context: CallbackContext, local_data, p_chat_id=None):
     """
     Save the video storage JSON data to the pinned message document.
     """
-    if not chat_id:
+    if not p_chat_id:
         chat_id = update.message.chat_id
     try:
         # Ensure local_data is a DotMap instance before converting
@@ -83,6 +88,9 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
 
         json_local_data = json.dumps(data_dict, indent=4).encode('utf-8')
 
+        if not p_chat_id:
+            context.user_data.update(data_dict)
+        
         # Properly handle the file buffer
         file_buffer = io.BytesIO()
         file_buffer.write(json_local_data)
@@ -100,8 +108,6 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
                 caption="This is a service message. Do NOT delete or unpin it unless you want to lose your videos!"
             )
         )
-        log.info("Storage message updated.")
-        return message
     except Exception as e:
         log.error(f"Error updating storage message: {e}")
         return None
@@ -797,7 +803,7 @@ async def show_statistics(update: Update, context: CallbackContext):
     except Exception as e:
         log.error(f"Error show_statistics: {e}")
 
-async def navigate_tree(update: Update, context: CallbackContext, direction, day=None, session=None, flight=None, edit=1):
+async def navigate_tree(update: Update, context: CallbackContext, direction, day=None, session=None, edit=1):
     try:
         local_data = await load_local_data(update, context)
         
@@ -813,7 +819,7 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
                     else:
                         day = None
             
-            text = generate_tree(local_data, day, session, flight) # generating Tree
+            text = generate_tree(local_data, day, session) # generating Tree
             
             # Generating buttons (this code is so trash, i want to die)
             if day == None:
@@ -824,14 +830,14 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
                 container = local_data.days[day].sessions
                 buttons = [InlineKeyboardButton(f"Session {id + 1} ({element.time_slot})", callback_data=f"nav:1:{day}:{id}") for id, element in enumerate(container)]
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:0")]])
-            elif flight == None:
-                container = local_data.days[day].sessions[session].flights
-                buttons = [InlineKeyboardButton(f"Flight {element.flight_number}", callback_data=f"nav:1:{day}:{session}:{id}") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
             else:
-                container = local_data.days[day].sessions[session].flights[flight].videos
-                buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:0") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
+                container = local_data.days[day].sessions[session].flights
+                buttons = [InlineKeyboardButton(f"Flight {element.flight_number}", callback_data=f"video:{day}:{session}:{id}:0:0") for id, element in enumerate(container)]
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
+            #else:
+            #    container = local_data.days[day].sessions[session].flights[flight].videos
+            #    buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:0") for id, element in enumerate(container)]
+            #    reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
     
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
@@ -866,7 +872,7 @@ async def open_video(update: Update, context: CallbackContext, day, session, fli
             else:
                 camera_sellector.append(InlineKeyboardButton(f"-> {v.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:1"))
                 
-        keyboard = [camera_sellector, [InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}:{flight}:0")]] 
+        keyboard = [camera_sellector, [InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}:0")]] 
         reply_markup = InlineKeyboardMarkup(keyboard)
         if edit == 0:
             await context.bot.send_video(chat_id=update.message.chat_id, video=file_id, caption=file_name, reply_markup=reply_markup)
