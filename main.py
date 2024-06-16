@@ -26,13 +26,14 @@ SYSTEM_DATA_FILE = "data.json"
 
 
 # Storage functions
-async def get_storage_message(update: Update, context: CallbackContext, chat_id=None):
+async def get_storage_message(update: Update, context: CallbackContext, p_chat_id=None):
     """
     Retrieve the pinned message in the chat to use as storage. If none exists, create a new one.
     """
-    if not chat_id:
+    if not p_chat_id:
         chat_id = update.message.chat_id
-    
+    else:
+        chat_id = p_chat_id
     try:
         chat: Chat = await context.bot.get_chat(chat_id)
         add_or_update_user(update, chat_id, chat.username)
@@ -47,18 +48,20 @@ async def get_storage_message(update: Update, context: CallbackContext, chat_id=
         log.error(f"Error retrieving storage message: {e}")
         return None
 
-async def load_local_data(update: Update, context: CallbackContext, p_chat_id=None):
+async def load_local_data(update: Update, context: CallbackContext, p_chat_id=None, force_reload=0):
     """
     Load the JSON storage from the pinned message document.
     """
     if not p_chat_id:
         chat_id = update.message.chat_id
+    else:
+        chat_id = p_chat_id
     try:
         data = None
         if not p_chat_id:
             data = DotMap(context.user_data)
             
-        if not data:
+        if not data or force_reload == 1:
             message = await get_storage_message(update, context, chat_id)
             if not message or not message.document:
                 log.error("Pinned message doesn't contain document")
@@ -67,11 +70,11 @@ async def load_local_data(update: Update, context: CallbackContext, p_chat_id=No
             file_info = await context.bot.get_file(message.document.file_id)
             byte_array = await file_info.download_as_bytearray()
             data = DotMap(json.loads(byte_array.decode('utf-8')))
-            context.user_data.update(data.toDict())
+            if not p_chat_id:
+                context.user_data.update(data.toDict())
         return data
     except Exception as e:
         log.error(f"Error while loading storage: {e}")
-        return None
 
 async def save_local_data(update: Update, context: CallbackContext, local_data, p_chat_id=None):
     """
@@ -79,6 +82,8 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
     """
     if not p_chat_id:
         chat_id = update.message.chat_id
+    else:
+        chat_id = p_chat_id
     try:
         # Ensure local_data is a DotMap instance before converting
         if isinstance(local_data, DotMap):
@@ -402,14 +407,6 @@ def load_system_data():
     with open(SYSTEM_DATA_FILE, 'r') as f:
         return DotMap(json.load(f))
 
-def check_ifly_chat_state(state):
-    try:
-        data = load_system_data()
-        return data.ifly_chat.session.status == state
-    except Exception as e:
-        log.error(f"Error check_ifly_chat_state: {e}")
-        raise
-
 def update_ifly_chat_state(state):
     try:
         data = load_system_data()
@@ -482,14 +479,23 @@ async def send_closable_message(update: Update, text):
     
 
 # Command handlers
-async def create_storage_message(update: Update, context: CallbackContext, chat_id=None):
+async def create_storage_message(update: Update, context: CallbackContext, p_chat_id=None):
     """
     Create a new storage message and pin it in the chat.
     """
-    if not chat_id:
+    if not p_chat_id:
         chat_id = update.message.chat_id
+    else:
+        chat_id = p_chat_id
     try:
         local_data = {"days": []}
+        if not p_chat_id:
+            try:
+                if context.user_data:
+                    local_data = context.user_data
+            except Exception:
+                pass
+        
         file_buffer = io.BytesIO()
         file_buffer.write(json.dumps(local_data).encode('utf-8'))
         file_buffer.seek(0)
@@ -535,10 +541,13 @@ async def start(update: Update, context: CallbackContext, edit=0):
     try:
         await update.message.delete()
         if update.message.chat_id == IFLY_CHAT_ID:
+            # When processing iFLY chat
             await ask_for_username(update, context, 1)
         else:
+            # When processing DMs
             add_or_update_user(update)
             await show_start_menu(update, context)
+            await load_local_data(update, context, p_chat_id=None, force_reload=1)
     except Exception as e:
         log.error(f"Error start command: {e}")
         
@@ -546,8 +555,10 @@ async def help(update: Update, context: CallbackContext):
     try:
         await update.message.delete()
         if update.message.chat_id == IFLY_CHAT_ID:
+            # When processing iFLY chat
             text = """You can send your videos to your bot after completing authentification"""
         else:
+            # When processing DMs
             text = """Awailable commands\:\n\/start \- Shows menu\n\/help \- Shows this message\n\/info \- Shows info message\n\/clear\_data \- Carefull\!\!\! Delets all saved videos\!\n\nTo upload videos \- just drop them here\. Bot will automatically find their correct flight\. Alternetively, you can send them from \@iFLYvideo account after completing authentification\."""
 
         await send_closable_message(update, text)
@@ -612,14 +623,14 @@ async def upload_video(update: Update, context: CallbackContext):
     """
     try:
         if not update.message.chat_id == IFLY_CHAT_ID:
+            # When processing DMs
             add_or_update_user(update)
-            chat_id = update.message.chat_id
+            chat_id = None
         else:
+            # When processing iFLY chat
             data = load_system_data()
-            if data.ifly_chat.session.ends < int(datetime.now().timestamp()):
-                text = "To upload videos - please send your username\n\nSorry, your session expired"
-                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
-                update_ifly_chat_state("no")
+            if not await check_session(context):
+                # TODO - Add some sort of queue for such videos to be uploaded after user autorised
                 return
             chat_id = data.ifly_chat.session.chat_id
 
@@ -690,8 +701,10 @@ async def inline_button(update: Update, context: CallbackContext): # Update hand
         await query.answer()
         
         if query.message.chat_id == IFLY_CHAT_ID:
+            # When processing iFLY chat
             await ifly_inline_buttons(update, context, query)
         else: 
+            # When processing DMs
             parts = query.data.split(':')
             log.info(parts)
             handler = {
@@ -798,7 +811,7 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
             if day == None:
                 container = local_data.days
                 buttons = [InlineKeyboardButton(f"{datetime.fromtimestamp(element.date).strftime('%d.%m.%Y')}", callback_data=f"nav:1:{id}") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"home:1")]])
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Menu", callback_data=f"home:1")]])
             elif session == None:
                 container = local_data.days[day].sessions
                 buttons = [InlineKeyboardButton(f"Session {id + 1} ({element.time_slot})", callback_data=f"nav:1:{day}:{id}") for id, element in enumerate(container)]
@@ -806,12 +819,8 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
             else:
                 container = local_data.days[day].sessions[session].flights
                 buttons = [InlineKeyboardButton(f"Flight {element.flight_number}", callback_data=f"video:{day}:{session}:{id}:0:0") for id, element in enumerate(container)]
-                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
-            #else:
-            #    container = local_data.days[day].sessions[session].flights[flight].videos
-            #    buttons = [InlineKeyboardButton(f"{element.camera_name}", callback_data=f"video:{day}:{session}:{flight}:{id}:0") for id, element in enumerate(container)]
-            #    reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Home", callback_data=f"nav:0"), InlineKeyboardButton("← Back", callback_data=f"nav:1:{day}:{session}")]])
-    
+                reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
+            
         if edit == 1:
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
             # await update.message.edit_text(text, reply_markup=reply_markup)
@@ -873,10 +882,9 @@ async def ask_for_username(update: Update, context: CallbackContext, restart=0):
 async def check_username(update: Update, context: CallbackContext):
     # check if username exists among users and sends a confirmation message
     try:
-        if check_ifly_chat_state("no"):
-            data = load_system_data()
-            await update.message.delete()
-            
+        await update.message.delete()
+        if not await check_session(context):
+            data = load_system_data()        
             users = data.users
             chat_id = None
             
@@ -911,7 +919,7 @@ async def check_username(update: Update, context: CallbackContext):
                 
                 data.ifly_chat.session.username = username
                 data.ifly_chat.session.chat_id = chat_id
-                data.ifly_chat.session.ends = int(datetime.now().timestamp())
+                data.ifly_chat.session.ends = 0
                 
                 save_system_data(data)
                 update_ifly_chat_state("yes")
@@ -920,7 +928,7 @@ async def check_username(update: Update, context: CallbackContext):
                 await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
                                     
     except Exception as e:
-        log.error(f"Error ask_for_username: {e}")
+        log.error(f"Error check_username: {e}")
         raise
 
 async def start_session(update: Update, context: CallbackContext, confiramtion):
@@ -943,11 +951,12 @@ async def start_session(update: Update, context: CallbackContext, confiramtion):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context), reply_markup=reply_markup)
-            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + 900
+            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + 10
             save_system_data(data)
+            context.job_queue.run_once(check_session, 15)
                 
     except Exception as e:
-        log.error(f"Error ask_for_username: {e}")
+        log.error(f"Error start_session: {e}")
         raise
 
 async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
@@ -958,22 +967,43 @@ async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
         log.info(parts)
         if parts[0] == "cancel_auth":
             await context.bot.delete_message(parts[1], parts[2])
-            
             text = "To upload videos - please send your username"
             await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
             update_ifly_chat_state("no")
+            
         elif parts[0] == "end_session":
+            data = load_system_data()
+            data.ifly_chat.session.ends = 0
+            save_system_data(data)
             text = "To upload videos - please send your username"
             await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
             update_ifly_chat_state("no")
 
                 
     except Exception as e:
-        log.error(f"Error ask_for_username: {e}")
+        log.error(f"Error ifly_inline_buttons: {e}")
         raise
 
-async def logout(update: Update, context: CallbackContext, user_id):
-    pass
+async def check_session(context: CallbackContext):
+    # Check if current session is valid
+    # Reurns True if session is valid
+    # Returns False if session is expired and updates menu message
+    try:
+        data = load_system_data()
+        if data.ifly_chat.session.ends > int(datetime.now().timestamp()):
+            return True
+        else:
+            text = "To upload videos - please send your username\n\nSorry, your session expired"
+            try:
+                await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context))
+            except Exception:
+                pass
+            update_ifly_chat_state("no")
+            return False
+            
+    except Exception as e:
+        log.error(f"Error check_session: {e}")
+        raise
     
 
 def main():
