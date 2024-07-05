@@ -9,20 +9,22 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from dotenv import load_dotenv
 
 
-# Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR)
-log = logging.getLogger(__name__)
-
-
 # Load environment variables
 try:
     load_dotenv('.env')
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     IFLY_CHAT_ID = int(os.getenv("IFLY_CHAT_ID"))
-except Exception:
-        log.error(f"Error setting environment variables! Please, check your .env file")
-    
-SYSTEM_DATA_FILE = "data.json"
+    SYSTEM_DATA_FILE = os.getenv("SYSTEM_DATA_FILE")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
+    SESSION_LENGTH  = int(os.getenv("SESSION_LENGTH"))
+except Exception as e:
+    print(f"Error setting environment variables! Please, check your .env file: {e}")
+
+
+# Convert LOG_LEVEL to corresponding logging level constant
+logging_level = getattr(logging, LOG_LEVEL, logging.ERROR)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging_level)
+log = logging.getLogger(__name__)
 
 
 # Storage functions
@@ -739,6 +741,7 @@ async def show_start_menu(update: Update, context: CallbackContext, edit=0):
             await update.message.edit_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
         else:
             await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+        await load_local_data(update, context, force_reload=1)
     except Exception as e:
         log.error(f"Error show_start_menu: {e}")
 
@@ -951,10 +954,9 @@ async def start_session(update: Update, context: CallbackContext, confiramtion):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context), reply_markup=reply_markup)
-            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + 10
+            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + SESSION_LENGTH
             save_system_data(data)
-            context.job_queue.run_once(check_session, 15)
-                
+            context.job_queue.run_once(check_session, SESSION_LENGTH + 5)           
     except Exception as e:
         log.error(f"Error start_session: {e}")
         raise
