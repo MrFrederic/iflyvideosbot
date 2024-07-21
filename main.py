@@ -130,18 +130,15 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
 # Service Functions
 def parse_filename(filename):
     """
-    Parse the filename to extract camera name, session and date.
+    Parse the filename to extract date, time, flight number, and camera name.
     """
     try:
-        filename = filename.replace('-', '_')
-        parts = filename.split('_')
-        
+        parts = filename.replace('-', '_').split('_')
         flight_number = parts[3]
         date = int(datetime.strptime('_'.join(parts[4:7]), '%Y_%m_%d').timestamp())
-        time_slot = get_time_slot('_'.join(parts[7:9]))
+        time = datetime.strptime('_'.join(parts[7:9]), '%H_%M')
         camera_name = parts[2]
-        
-        return date, time_slot, flight_number, camera_name
+        return date, time.strftime('%H:%M'), flight_number, camera_name
     except Exception as e:
         log.error(f"Error parsing filename: {e}")
         raise
@@ -177,111 +174,76 @@ def generate_unique_video_id(local_data):
 
 def get_or_create_day(local_data, date):
     """
-    Retrieve or create a new session based on the provided date.
+    Retrieve or create a new day based on the provided timestamp.
     """
     try:
-        log.info(f"get_or_create_day date = {date}")
         for day in local_data.days:
             if day.date == date:
-                log.info(f"found existing date")
                 return day
-        
         new_day = DotMap({
             "date": date,
             "sessions": []
         })
-        
-        for idx, day in enumerate(local_data.days):
-            log.info(f"comparing {date} w {day.date}, idx = {idx}")
-            if date < day.date:
-                log.info(f"True")
-                local_data.days.insert(idx, new_day)
-                return local_data.days[idx]
-        else:
-            log.info(f"appending")
-            local_data.days.append(new_day)
-            return local_data.days[-1]
+        local_data.days.append(new_day)
+        local_data.days.sort(key=lambda d: d.date)
+        return new_day
     except Exception as e:
         log.error(f"Error get_or_create_day: {e}")
         raise
 
-def get_or_create_session(day, time_slot):
+def get_or_create_session(day, time_str):
     """
-    Retrieve or create a new session based on the provided date.
+    Retrieve or create a new session based on the provided time string (HH:MM).
     """
     try:
+        time = datetime.strptime(time_str, '%H:%M')
         for session in day.sessions:
-            if session.time_slot == time_slot:
+            session_start = datetime.strptime(session.start_time, '%H:%M')
+            session_end = datetime.strptime(session.end_time, '%H:%M')
+            if abs((session_start - time).total_seconds()) <= 900 or abs((session_end - time).total_seconds()) <= 900:
+                session.end_time = max(session.end_time, time_str)
                 return session
-        
         new_session = DotMap({
-            "time_slot": time_slot,
+            "start_time": time_str,
+            "end_time": time_str,
             "flights": []
         })
-        
-        for idx, session in enumerate(day.sessions):
-            if datetime.strptime(time_slot, "%H:%M") < datetime.strptime(session.time_slot, "%H:%M"):
-                day.sessions.insert(idx, new_session)
-                return day.sessions[idx]
-        else:
-            day.sessions.append(new_session)
-            return day.sessions[-1]
+        day.sessions.append(new_session)
+        day.sessions.sort(key=lambda s: datetime.strptime(s.start_time, '%H:%M'))
+        return new_session
     except Exception as e:
         log.error(f"Error get_or_create_session: {e}")
         raise
 
-def get_or_create_flight(session, flight_number, length):
+def get_or_create_flight(session, flight_number, time_str, length):
     """
-    Retrieve or create a new flight based on the provided flight number.
+    Retrieve or create a new flight based on the provided flight number and time string.
     """
     try:
         for flight in session.flights:
-            if flight.flight_number == flight_number:
+            if flight.flight_number == flight_number and flight.time == time_str:
                 return flight
-        
         new_flight = DotMap({
-            "length": length,
             "flight_number": flight_number,
+            "time": time_str,
+            "length": length,
             "videos": [],
         })
-    
-        for idx, flight in enumerate(session.flights):
-            if flight_number < flight.flight_number:
-                session.flights.insert(idx, new_flight)
-                return session.flights[idx]
-        else:
-            session.flights.append(new_flight)
-            return session.flights[-1]
+        session.flights.append(new_flight)
+        session.flights.sort(key=lambda f: datetime.strptime(f.time, '%H:%M'))
+        return new_flight
     except Exception as e:
         log.error(f"Error getting or creating flight: {e}")
         raise
 
 def sort_videos_by_camera(flight):
+    """
+    Sort videos within a flight by camera name according to a specified order.
+    """
     camera_order = ["Door", "Centerline", "Firsttimer", "Sideline"]
-    
-    if flight.videos:
-        # Create a mapping from camera name to its index in the order list
-        camera_order_index = {camera: index for index, camera in enumerate(camera_order)}
-        
-        # Sort the videos based on the camera order index, videos with camera names not in the list will be placed at the end
-        sorted_videos = sorted(flight.videos, key=lambda video: camera_order_index.get(video.camera_name, len(camera_order)))
-        
-        # Handle duplicates by grouping videos with the same camera name together while keeping the specified order
-        sorted_videos_by_name = []
-        seen_cameras = set()
-        for camera in camera_order:
-            for video in sorted_videos:
-                if video.camera_name == camera and video.camera_name not in seen_cameras:
-                    sorted_videos_by_name.extend([v for v in sorted_videos if v.camera_name == camera])
-                    seen_cameras.add(camera)
-        
-        # Append videos with camera names not in the specified order at the end
-        for video in sorted_videos:
-            if video.camera_name not in camera_order:
-                sorted_videos_by_name.append(video)
-        
-        # Update the flight object with sorted videos
-        flight.videos = sorted_videos_by_name
+    flight.videos.sort(
+        key=lambda video: camera_order.index(video.camera_name) if video.camera_name in camera_order else len(camera_order)
+    )
     return flight
 
 
@@ -333,7 +295,7 @@ def generate_tree(local_data, day_p=None, session_p=None):
                         if session_p == index_s: line.append(f"*")
                         line.append(f"Session {index_s + 1} ")
                         if session_p == index_s: line.append(f"*")
-                        line.append(f"_\({session.time_slot}\)_")
+                        line.append(f"_\({session.start_time}\)_")
                         
                         tree_text.append(''.join(line))
                     if session_p == index_s:
@@ -351,7 +313,7 @@ def generate_tree(local_data, day_p=None, session_p=None):
                             if index_f + 1 == len(flights): line.append(" ┗━` ")
                             else: line.append(" ┣━` ")
 
-                            line.append(f"📁 Flight {flight.flight_number} ")
+                            line.append(f"📁 Flight {index_f + 1} ")
                             line.append(f"_{format_flight_length(flight.length)}_")
 
                             tree_text.append(''.join(line))
@@ -453,6 +415,11 @@ async def ifly_menu_message_id(context: CallbackContext, restart=0):
         raise
     
 def add_or_update_user(update: Update, chat_id=None, username=None):
+    """
+    Tries to find provided user in system data. Creates new if there isn't one
+    
+    Returns returns True if found user doesen't heve a username
+    """
     try:
         data = load_system_data()
         
@@ -470,7 +437,8 @@ def add_or_update_user(update: Update, chat_id=None, username=None):
         new_user = {"username": username, "chat_id": chat_id}
         data.users.append(new_user)
         save_system_data(data)
-        return False
+        if not username:
+            return True  
             
     except Exception as e:
         log.error(f"Error add_or_update_user: {e}")
@@ -577,9 +545,8 @@ async def start(update: Update, context: CallbackContext, edit=0):
             await ask_for_username(update, context, 1)
         else:
             # When processing DMs
-            #if not :
-                # await send_closable_message(update, "Your username is hidden\\! You won\\'t be able to upload videos from \\@iFLYvideo")
-            add_or_update_user(update)
+            if add_or_update_user(update):
+                await send_closable_message(update, "You don't have a username\\! You won\\'t be able to upload videos from \\@iFLYvideo")
             await show_start_menu(update, context)
             await load_local_data(update, context, p_chat_id=None, force_reload=1)
     except Exception as e:
@@ -694,22 +661,22 @@ async def upload_video(update: Update, context: CallbackContext):
 
 async def process_video(local_data, file_name, file_id, length):
     """
-    Process information about video to return updated local_data object
+    Process information about video to return updated local_data object.
     """
-    try:    
+    try:
+        date, time_str, flight_number, camera_name = parse_filename(file_name)
+        log.info(f"Received video: file_id={file_id}, file_name={file_name}, length={length}s, date={date}, time={time_str}, flight_number={flight_number}, camera_name={camera_name}")
 
-        date, time_slot, flight_number, camera_name = parse_filename(file_name)
+        day = get_or_create_day(local_data, date)
+        session = get_or_create_session(day, time_str)
+        flight = get_or_create_flight(session, flight_number, time_str, length)
 
-        log.info(f"Received video: file_id={file_id}, file_name={file_name}, length={length}s, date={date}, time_slot={time_slot}, flight_number={flight_number}, camera_name={camera_name}")
-        
-        flight = get_or_create_flight(get_or_create_session(get_or_create_day(local_data, date), time_slot), flight_number, length)
-        
         # Check for duplicate video across all flights in all sessions
         duplicate_found = any(
-            video.file_name == file_name
-            for day in local_data.days
-            for session in day.sessions
-            for flight in session.flights
+            video.file_name == file_name 
+            for day in local_data.days 
+            for session in day.sessions 
+            for flight in session.flights 
             for video in flight.videos
         )
 
@@ -855,11 +822,11 @@ async def navigate_tree(update: Update, context: CallbackContext, direction, day
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("🏠 Menu", callback_data=f"home:1")]])
             elif session == None:
                 container = local_data.days[day].sessions
-                buttons = [InlineKeyboardButton(f"Session {id + 1} ({element.time_slot})", callback_data=f"nav:1:{day}:{id}") for id, element in enumerate(container)]
+                buttons = [InlineKeyboardButton(f"Session {id + 1} ({element.start_time})", callback_data=f"nav:1:{day}:{id}") for id, element in enumerate(container)]
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:0")]])
             else:
                 container = local_data.days[day].sessions[session].flights
-                buttons = [InlineKeyboardButton(f"Flight {element.flight_number}", callback_data=f"video:{day}:{session}:{id}:0:0") for id, element in enumerate(container)]
+                buttons = [InlineKeyboardButton(f"Flight {id + 1}", callback_data=f"video:{day}:{session}:{id}:0:0") for id, element in enumerate(container)]
                 reply_markup = InlineKeyboardMarkup([[button] for button in buttons] + [[InlineKeyboardButton("← Back", callback_data=f"nav:0:{day}")]])
             
         if edit == 1:
