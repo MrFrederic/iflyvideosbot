@@ -619,7 +619,13 @@ async def regenerate_local_data(update: Update, context: CallbackContext):
                                 "length": length
                             }
                             gathered_videos.append(video_info)
-                            
+            
+            # Used this for testing, now it will live here forever
+            # 
+            # regen_stuff = os.path.join("regen", f"{user.chat_id}.json")
+            # with open(regen_stuff, "wb") as f:
+            #     f.write(json.dumps(gathered_videos, indent=4).encode('utf-8'))
+            
             local_data = DotMap({"days": []})
             for v in gathered_videos:
                 local_data = await process_video(DotMap(local_data), v["file_name"], v["file_id"], v["length"])
