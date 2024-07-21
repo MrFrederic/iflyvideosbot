@@ -498,18 +498,35 @@ async def create_storage_message(update: Update, context: CallbackContext, p_cha
         chat_id = update.message.chat_id
     else:
         chat_id = p_chat_id
+    log.info(f"Creating a storage message for user {chat_id}")
     try:
-        local_data = {"days": []}
+        local_data = None
         if not p_chat_id:
             try:
+                log.info(f"chat_id is not provided, trying to restore data from context")
                 if context.user_data:
                     local_data = context.user_data
-            except Exception:
-                pass
-        else:
+                    log.info(f"Data sucessfully restored from context")
+                else:
+                    log.info(f"Context is empty, moving on")
+            except Exception as e:
+                log.error(e)
+                
+        if not local_data:
             backup_file = os.path.join(BACKUP_PATH, f"{chat_id}.json")
-            with open(backup_file, 'r') as f:
-                local_data = json.load(f)
+            try:
+                log.info(f"Trying to resore data from backup: {backup_file}")
+                with open(backup_file, 'r') as f:
+                    local_data = json.load(f)
+                    log.info("Data sucessfully restored from backup")
+            except Exception as e:
+                log.info(e)
+                log.info("Probably there was no backup file")
+                
+        if not local_data:
+            log.info("Setting local_data as a default empty string")
+            local_data = {"days": []}
+                    
         
         file_buffer = io.BytesIO()
         file_buffer.write(json.dumps(local_data, indent=4).encode('utf-8'))
@@ -560,8 +577,9 @@ async def start(update: Update, context: CallbackContext, edit=0):
             await ask_for_username(update, context, 1)
         else:
             # When processing DMs
-            if not add_or_update_user(update):
-                await send_closable_message(update, "Your username is hidden! You won't be able to upload videos from @iFLYvideo")
+            #if not :
+                # await send_closable_message(update, "Your username is hidden\\! You won\\'t be able to upload videos from \\@iFLYvideo")
+            add_or_update_user(update)
             await show_start_menu(update, context)
             await load_local_data(update, context, p_chat_id=None, force_reload=1)
     except Exception as e:
