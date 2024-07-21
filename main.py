@@ -17,6 +17,9 @@ try:
     SYSTEM_DATA_FILE = os.getenv("SYSTEM_DATA_FILE")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
     SESSION_LENGTH  = int(os.getenv("SESSION_LENGTH"))
+    
+    BACKUP_PATH = "backup"
+    os.makedirs(BACKUP_PATH, exist_ok=True)
 except Exception as e:
     print(f"Error setting environment variables! Please, check your .env file: {e}")
 
@@ -115,6 +118,10 @@ async def save_local_data(update: Update, context: CallbackContext, local_data, 
                 caption="This is a service message. Do NOT delete or unpin it unless you want to lose your videos!"
             )
         )
+
+        backup_file_path = os.path.join(BACKUP_PATH, f"{chat_id}.json")
+        with open(backup_file_path, "wb") as backup_file:
+            backup_file.write(json_local_data)
     except Exception as e:
         log.error(f"Error updating storage message: {e}")
         return None
@@ -154,7 +161,7 @@ def get_time_slot(input_time):
 
 def generate_unique_video_id(local_data):
     """
-    Generate a unique ID for sessions or videos in the storage.
+    Generate a unique ID for videos in the storage.
     """
     try:
         max_id = 0
@@ -463,6 +470,8 @@ def add_or_update_user(update: Update, chat_id=None, username=None):
         new_user = {"username": username, "chat_id": chat_id}
         data.users.append(new_user)
         save_system_data(data)
+        return False
+            
     except Exception as e:
         log.error(f"Error add_or_update_user: {e}")
         raise
@@ -497,9 +506,13 @@ async def create_storage_message(update: Update, context: CallbackContext, p_cha
                     local_data = context.user_data
             except Exception:
                 pass
+        else:
+            backup_file = os.path.join(BACKUP_PATH, f"{chat_id}.json")
+            with open(backup_file, 'r') as f:
+                local_data = json.load(f)
         
         file_buffer = io.BytesIO()
-        file_buffer.write(json.dumps(local_data).encode('utf-8'))
+        file_buffer.write(json.dumps(local_data, indent=4).encode('utf-8'))
         file_buffer.seek(0)
         message = await context.bot.send_document(
             chat_id=chat_id,
@@ -547,7 +560,8 @@ async def start(update: Update, context: CallbackContext, edit=0):
             await ask_for_username(update, context, 1)
         else:
             # When processing DMs
-            add_or_update_user(update)
+            if not add_or_update_user(update):
+                await send_closable_message(update, "Your username is hidden! You won't be able to upload videos from @iFLYvideo")
             await show_start_menu(update, context)
             await load_local_data(update, context, p_chat_id=None, force_reload=1)
     except Exception as e:
@@ -892,11 +906,12 @@ async def check_username(update: Update, context: CallbackContext):
             chat_id = None
             
             for user in users:
-                if str(user.username).lower() == update.message.text.lower().replace('@','').replace("t.me/",''):
+                if str(user.username).lower() == update.message.text.lower().replace('@','').replace("t.me/",'') or str(user.chat_id) == update.message.text.lower().replace('@','').replace("t.me/",''):
                     log.info(f"Found user. Chat_id = {user.chat_id}")
                     chat_id = user.chat_id
                     username = user.username
                     break
+                    
             
             # send auth message
             if chat_id:
@@ -1018,8 +1033,8 @@ def main():
     application.add_handler(CommandHandler("help", help))
     application.add_handler(CommandHandler("clear_data", clear_local_data))
     application.add_handler(CommandHandler("show_data", show_local_data))
-    application.add_handler(CommandHandler("create_storage", create_storage_message))
-    application.add_handler(CommandHandler("repair_all_local_data_files", regenerate_local_data))
+    application.add_handler(CommandHandler("create_storage", create_storage_message)) # Force-creating a storage message. Uses local_data from context to populate file if available
+    application.add_handler(CommandHandler("repair_all_local_data_files", regenerate_local_data)) # Temporary stores all videos in a single list and then "reloads"
     application.add_handler(MessageHandler(filters.VIDEO, upload_video))
     application.add_handler(MessageHandler(filters.User(user_id=IFLY_CHAT_ID), check_username))
     application.add_handler(MessageHandler(filters.Document.FileExtension("json"), edit_local_data))

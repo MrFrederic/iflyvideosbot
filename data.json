@@ -1,10 +1,10 @@
 {
     "ifly_chat": {
         "session": {
-            "status": "no",
+            "status": "yes",
             "username": "MrFrederic",
             "chat_id": 932162499,
-            "ends": 1718446490
+            "ends": 1720161315
         },
         "menu_message_id": 2096
     },
