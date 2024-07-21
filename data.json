@@ -8,8 +8,7 @@
         },
         "menu_message_id": 2096
     },
-    "users": [
-        {
+    "users": [{
             "username": "MrFrederic",
             "chat_id": 932162499
         },
