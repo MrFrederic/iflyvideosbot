@@ -1,0 +1,21 @@
+{
+    "ifly_chat": {
+        "session": {
+            "status": "yes",
+            "username": "MrFrederic",
+            "chat_id": 932162499,
+            "ends": 1720161315
+        },
+        "menu_message_id": 2096
+    },
+    "users": [
+        {
+            "username": "MrFrederic",
+            "chat_id": 932162499
+        },
+        {
+            "username": "MFCorp",
+            "chat_id": 7028266642
+        }
+    ]
+}
