@@ -18,6 +18,7 @@ try:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
     SESSION_LENGTH  = int(os.getenv("SESSION_LENGTH"))
     
+    SESSION_THRESHOLD = 1200
     BACKUP_PATH = "backup"
     os.makedirs(BACKUP_PATH, exist_ok=True)
 except Exception as e:
@@ -200,7 +201,7 @@ def get_or_create_session(day, time_str):
         for session in day.sessions:
             session_start = datetime.strptime(session.start_time, '%H:%M')
             session_end = datetime.strptime(session.end_time, '%H:%M')
-            if abs((session_start - time).total_seconds()) <= 900 or abs((session_end - time).total_seconds()) <= 900:
+            if abs((session_start - time).total_seconds()) <= SESSION_THRESHOLD or abs((session_end - time).total_seconds()) <= SESSION_THRESHOLD:
                 session.end_time = max(session.end_time, time_str)
                 return session
         new_session = DotMap({
@@ -639,6 +640,7 @@ async def upload_video(update: Update, context: CallbackContext):
             if not await check_session(context):
                 # TODO - Add some sort of queue for such videos to be uploaded after user autorised
                 return
+            add_session_check_job(context)
             chat_id = data.ifly_chat.session.chat_id
 
         local_data = await load_local_data(update, context, chat_id)
@@ -649,10 +651,11 @@ async def upload_video(update: Update, context: CallbackContext):
         file_name = video.file_name
         length = round(video.duration / 5) * 5
 
-        local_data = await process_video(local_data, file_name, file_id, length)
-        if local_data:
-            await save_local_data(update, context, local_data, chat_id)
-            log.info(f"Video {file_name} added successfully.")
+        if length > 10:
+            local_data = await process_video(local_data, file_name, file_id, length)
+            if local_data:
+                await save_local_data(update, context, local_data, chat_id)
+                log.info(f"Video {file_name} added successfully.")
         
         await update.message.delete()
         
@@ -960,12 +963,29 @@ async def start_session(update: Update, context: CallbackContext, confiramtion):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await context.bot.edit_message_text(text, IFLY_CHAT_ID, await ifly_menu_message_id(context), reply_markup=reply_markup)
-            data.ifly_chat.session.ends = int(datetime.now().timestamp()) + SESSION_LENGTH
-            save_system_data(data)
-            context.job_queue.run_once(check_session, SESSION_LENGTH + 5)           
+            refresh_session()
+            add_session_check_job(context)
     except Exception as e:
         log.error(f"Error start_session: {e}")
         raise
+
+def refresh_session():
+    data = load_system_data()
+    data.ifly_chat.session.ends = int(datetime.now().timestamp()) + SESSION_LENGTH
+    save_system_data(data)
+    
+def add_session_check_job(context: CallbackContext):
+    try:
+        user_data = context.user_data
+        if 'jobs' in user_data:
+            for job in user_data['jobs']:
+                job.schedule_removal()
+            # Clear the user's jobs list after cancelling
+            user_data['jobs'] = []
+    except Exception as e:
+        log.error(f"Failed to remove jobs: {e}")
+    context.job_queue.run_once(check_session, SESSION_LENGTH + 5)  
+    
 
 async def ifly_inline_buttons(update: Update, context: CallbackContext, query):
     # upon recieving confirmation - starting session
@@ -999,6 +1019,7 @@ async def check_session(context: CallbackContext):
     try:
         data = load_system_data()
         if data.ifly_chat.session.ends > int(datetime.now().timestamp()):
+            refresh_session()
             return True
         else:
             text = "To upload videos - please send your username\n\nSorry, your session expired"
