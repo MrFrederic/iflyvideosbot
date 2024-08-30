@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from videos import Video
 from flights import Flight
 from typing import Optional
+from users import User_Management, User
 
 class Storage:
     db_file = "data.db"
@@ -105,7 +106,14 @@ class Storage:
             flights = [flight for flight in flights if start_of_day.timestamp() <= flight.datetime <= end_of_day.timestamp()]
 
         return flights
+    
+    def list_flights_users(self, flight: Flight) -> list[User]:
+        self.db_cursor.execute("SELECT user FROM user_flight WHERE flight = ?", (flight.id,))
+        users_ids = self.db_cursor.fetchall()
+        u_m = User_Management(self)
+        users = [u_m.get(users_id[0]) for users_id in users_ids]
 
+        return users
 
 
     def video(self, id: int) -> Optional[Video]:

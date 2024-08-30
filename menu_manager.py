@@ -1,7 +1,8 @@
 from datetime import datetime
 
 from users import User
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, Chat
+from storage_manager import Storage
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, Chat, InputMediaVideo
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 
 class CallbackHandler:  # Handles callbacks and routes
@@ -17,9 +18,10 @@ class CallbackHandler:  # Handles callbacks and routes
         "03": ("home", []),
         "04": ("library", ["date"]),
         "05": ("video", ["id"]),
-        "06": ("global_home", ["user"]),
-        "07": ("global_settings", ["user"]),
-        "08": ("global_login", ["user"]),
+        "06": ("video_settings", ["id"]),
+        "07": ("global_home", ["user"]),
+        "08": ("global_settings", ["user"]),
+        "09": ("global_login", ["user"]),
     }
 
     def __compress_date(num):
@@ -82,7 +84,8 @@ class Chat:
         self.id = user.id
         self.user = user
 
-    def update_state
+    def update_state():
+        pass
 
 class Inteface:
     # methods to for generating "screens"
@@ -98,3 +101,42 @@ class Inteface:
                 InlineKeyboardButton("⚙️ Settings", callback_data=CallbackHandler.compress_route("settings")),
             ]
         ])
+
+    @classmethod
+    def video(cls, id, storage: Storage):
+        # helper functions
+        def transform_timestamp(timestamp):
+            # Convert the timestamp to a datetime object
+            dt_object = datetime.fromtimestamp(timestamp)
+            # Format the datetime object to the desired format
+            formatted_time = dt_object.strftime('%d.%m.%Y %H:%M')
+            return formatted_time
+
+        video = storage.video(id)
+        flight = storage.flight(video.id)
+        flight_date = transform_timestamp(flight.datetime)
+        flyers = storage.list_flights_users(flight)
+        
+        
+        text = f"""📅 Date: {flight_date}\n🪂 Flyers: {", ".join([flyer.username for flyer in flyers])}\n⌛️ Duration: {flight.length // 60}:{flight.length % 60} min ({flight.length // 60} sec)"""
+        reply_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🎥 Browse Videos", callback_data=CallbackHandler.compress_route("library")),
+            ],
+            [
+                InlineKeyboardButton("📊 My Stats", callback_data=CallbackHandler.compress_route("stats")),
+                InlineKeyboardButton("⚙️ Settings", callback_data=CallbackHandler.compress_route("settings")),
+            ]
+        ])
+        media = InputMediaVideo(video.telegram_id)
+
+
+
+#        "01": ("stats", []),
+#        "02": ("settings", []),
+#        "03": ("home", []),
+#        "04": ("library", ["date"]),
+#        "05": ("video", ["id"]),
+#        "06": ("global_home", ["user"]),
+#        "07": ("global_settings", ["user"]),
+#        "08": ("global_login", ["user"]),
